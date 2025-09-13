@@ -38,7 +38,7 @@ default:
         module: tts/bailian_tts/tts_handler_cosyvoice_bailian
         voice: "longxiaochun"
         model_name: "cosyvoice-v1"
-        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
+        # default=os.getenv("DASHSCOPE_API_KEY")
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
       LLMOpenAICompatible:
         enabled: True
@@ -52,7 +52,6 @@ default:
         # api_url: 'http://127.0.0.1:11434/v1' # ollama
         # api_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
-        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
         avatar_name: 20250408/sample_data
