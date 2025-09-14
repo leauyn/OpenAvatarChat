@@ -9,7 +9,7 @@
 	url = git@github.com:OpenBMB/MiniCPM-o.git
 [submodule "src/third_party/gradio_webrtc_videochat"]
 	path = src/third_party/gradio_webrtc_videochat
-	url = git@github.com:HumanAIGC-Engineering/gradio-webrtc.git
+	url = git@github.com:leauyn/gradio-webrtc.git
 [submodule "src/third_party/CosyVoice"]
 	path = src/handlers/tts/cosyvoice/CosyVoice
 	url = git@github.com:FunAudioLLM/CosyVoice.git
