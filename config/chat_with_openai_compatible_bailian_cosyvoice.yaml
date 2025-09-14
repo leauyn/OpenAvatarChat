@@ -21,7 +21,7 @@ default:
           realm: "turn.101-201-29-97.turnserver"
         module: client/rtc_client/client_handler_rtc
         # max time a session will last for
-        connection_ttl: 900
+        connection_ttl: 1800
       SileroVad:
         module: vad/silerovad/vad_handler_silero
         speaking_threshold: 0.4
@@ -72,7 +72,7 @@ default:
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
         avatar_name: 20250612/P1-64AzfrJY037WpS69RiUMw  
-        fps: 10
+        fps: 8
         debug: false
         enable_fast_mode: false
         use_gpu: false
