@@ -4,7 +4,7 @@
 			"path": "."
 		},
 		{
-			"path": "src/third_party/gradio_webrtc_videochat"
+			"path": "src/handlers/client/rtc_client/frontend"
 		}
 	]
 }

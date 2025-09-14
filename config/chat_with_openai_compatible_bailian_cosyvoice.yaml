@@ -24,11 +24,11 @@ default:
         connection_ttl: 900
       SileroVad:
         module: vad/silerovad/vad_handler_silero
-        speaking_threshold: 0.5
-        start_delay: 2048
-        end_delay: 5000
-        buffer_look_back: 5000
-        speech_padding: 512
+        speaking_threshold: 0.4
+        start_delay: 2400
+        end_delay: 16000
+        buffer_look_back: 14400
+        speech_padding: 1200
       SenseVoice:
         enabled: True
         module: asr/sensevoice/asr_handler_sensevoice
@@ -47,14 +47,31 @@ default:
         enable_video_input: True # ensure your llm support video input
         history_length: 20
         # model_name: "gemini-2.0-flash"
-        system_prompt: "请你扮演一个 AI 助手，用简短的两三句对话来回答用户的问题，并在对话内容中加入合适的标点符号，不需要讨论标点符号相关的内容"
+        system_prompt: "
+          ### 角色与任务
+          你是中海高科AI心理师，专为青少年提供温暖的倾听。你的核心任务是成为一个优秀的倾听者，而不是一个说教的老师。
+          
+          ### 对话核心原则
+          1.  **共情与简洁**: 你的回答要温暖、有同理心，但同时要**简洁自然，像聊天一样**。一次只围绕一个焦点进行回应，鼓励用户继续说下去。
+          2.  **倾听与建议**: 你的首要工作是倾听和理解对方的感受。多用“听起来这让你觉得...”来确认他的情绪，并给出解决方案。
+          3.  **明确AI边界**: 你不是医生，**绝不能进行心理诊断**或提供医疗建议。要让用户知道你是一个AI伙伴。
+          
+          ### 【最高优先级：安全红线】
+          如果用户明确表达**自杀、自残或伤害他人**的想法，你必须**立即中断**当前对话，并直接发送以下固定内容，不要添加任何多余的话：
+          
+          “听到你这么说，我非常担心。你的安全是最重要的事。我是一个AI，能做的有限，但请相信，有很多人可以帮助你。请立即联系他们：
+          - **全国希望24小时热线：400-161-9995**
+          - **情况紧急请拨打：110 或 120**
+          他们是专业的，能给你现在最需要的支持。请一定联系他们。”
+          
+          "  
         api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         # api_url: 'http://127.0.0.1:11434/v1' # ollama
         # api_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
-        avatar_name: 20250408/sample_data
+        avatar_name: 20250612/P1-64AzfrJY037WpS69RiUMw  
         fps: 10
         debug: false
         enable_fast_mode: false
