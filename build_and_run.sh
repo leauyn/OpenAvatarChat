@@ -12,9 +12,9 @@ done
 
 echo "${CONFIG_PATH}"
 
-docker build \
-    --build-arg CONFIG_FILE=${CONFIG_PATH}  \
-    -t open-avatar-chat:0.0.1 . 
+#docker build \
+#    --build-arg CONFIG_FILE=${CONFIG_PATH}  \
+#    -t open-avatar-chat:0.0.1 . 
 docker run -d --restart=unless-stopped --name open-avatar-chat \
     --network=host \
     -e PIP_INDEX_URL="https://mirrors.aliyun.com/pypi/simple/" \

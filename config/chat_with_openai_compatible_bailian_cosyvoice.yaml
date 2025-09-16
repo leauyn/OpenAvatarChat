@@ -30,15 +30,30 @@ default:
         buffer_look_back: 14400
         speech_padding: 1200
       SenseVoice:
-        enabled: True
+        enabled: False
         module: asr/sensevoice/asr_handler_sensevoice
         model_name: "iic/SenseVoiceSmall"
+      Paraformer:
+        enabled: True
+        module: asr/paraformer/asr_handler_paraformer
+        model_name: "paraformer-realtime-v2"
+        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
+        sample_rate: 16000
+        format: "pcm"
+        enable_intermediate_result: True
+        enable_punctuation_prediction: True
+        enable_inverse_text_normalization: True
+        language_hints: ["zh"]
+        max_sentence_silence: 800
+        enable_emotion_recognition: False
+        enable_semantic_sentence_detection: False
       CosyVoice:
         enabled: True
         module: tts/bailian_tts/tts_handler_cosyvoice_bailian
         voice: "longxiaochun"
         model_name: "cosyvoice-v1"
         # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
       LLMOpenAICompatible:
         enabled: True
@@ -69,6 +84,7 @@ default:
         # api_url: 'http://127.0.0.1:11434/v1' # ollama
         # api_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
         avatar_name: 20250612/P1-64AzfrJY037WpS69RiUMw  
