@@ -84,7 +84,7 @@ class ASRContext(HandlerContext):
         if self.dump_audio:
             dump_file_path = os.path.join(DirectoryInfo.get_project_dir(),
                                           f"dump_talk_audio_{session_id}.pcm")
-            self.audio_dump_file = open(dump_file_path, "wb")
+            # self.audio_dump_file = open(dump_file_path, "wb")
         self.shared_states = None
 
 
