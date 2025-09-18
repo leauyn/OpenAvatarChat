@@ -30,11 +30,11 @@ default:
         buffer_look_back: 14400
         speech_padding: 1200
       SenseVoice:
-        enabled: False
+        enabled: True
         module: asr/sensevoice/asr_handler_sensevoice
         model_name: "iic/SenseVoiceSmall"
       Paraformer:
-        enabled: True
+        enabled: False
         module: asr/paraformer/asr_handler_paraformer
         model_name: "paraformer-realtime-v2"
         api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
