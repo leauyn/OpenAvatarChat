@@ -214,6 +214,7 @@ class LLMContext(HandlerContext):
         self.is_first_interaction = True  # 标记是否为首次交互
         self.system_prompt_templates = None
         self.handler_config = None  # 存储配置信息
+        self.user_id = None  # 存储用户ID
 
 
 class HandlerLLM(HandlerBase, ABC):
@@ -264,9 +265,48 @@ class HandlerLLM(HandlerBase, ABC):
         # 存储配置信息，供后续使用
         context.handler_config = handler_config
         
+        # 详细排查用户ID获取逻辑
+        # logger.info(f"🔍 create_context 用户ID排查开始:")
+        # logger.info(f"  - session_context.user_id: {getattr(session_context, 'user_id', 'NOT_SET')}")
+        # logger.info(f"  - hasattr(session_context, 'user_id'): {hasattr(session_context, 'user_id')}")
+        # logger.info(f"  - hasattr(session_context, 'is_user_id_updated'): {hasattr(session_context, 'is_user_id_updated')}")
+        # if hasattr(session_context, 'is_user_id_updated'):
+        #     logger.info(f"  - session_context.is_user_id_updated(): {session_context.is_user_id_updated()}")
+        # logger.info(f"  - handler_config.user_id: {handler_config.user_id}")
+        
+        # 尝试从会话上下文获取用户ID，如果没有则使用配置中的默认值
+        user_id = getattr(session_context, 'user_id', None) or handler_config.user_id
+        
+        # 如果会话上下文有用户ID更新标志，优先使用会话上下文中的用户ID
+        if hasattr(session_context, 'is_user_id_updated') and session_context.is_user_id_updated():
+            user_id = getattr(session_context, 'user_id', None) or user_id
+            # logger.info(f"✅ 使用已更新的会话用户ID: {user_id}")
+        
+        # 如果仍然没有用户ID，尝试从存储中获取（使用session_id作为key）
+        if not user_id or user_id == handler_config.user_id:
+            try:
+                from src.utils.user_id_storage import get_user_id
+                stored_user_id = get_user_id(session_context.session_info.session_id)
+                if stored_user_id:
+                    user_id = stored_user_id
+                    # logger.info(f"✅ 从存储中获取到用户ID: {user_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ 从存储获取用户ID失败: {e}")
+        
+        # 将获取到的用户ID也更新到会话上下文中
+        if user_id and user_id != handler_config.user_id:
+            if hasattr(session_context, 'update_user_id'):
+                session_context.update_user_id(user_id)
+                # logger.info(f"✅ 更新会话上下文用户ID: {user_id}")
+        
+        # logger.info(f"🎯 create_context 最终使用的用户ID: {user_id}")
+        
+        # 将用户ID存储到context中
+        context.user_id = user_id
+        
         # 获取用户信息和测评数据
-        user_info = get_user_info(handler_config.user_id, handler_config.user_info_api_url)
-        survey_data = get_user_survey_data(handler_config.user_id, handler_config.survey_api_url)
+        user_info = get_user_info(user_id, handler_config.user_info_api_url)
+        survey_data = get_user_survey_data(user_id, handler_config.survey_api_url)
         
         # 选择系统提示词模板
         if context.system_prompt_templates and "B" in context.system_prompt_templates:
@@ -321,19 +361,58 @@ class HandlerLLM(HandlerBase, ABC):
         template_name = "开场白模式" if template == "A" else "对话模式"
         logger.info(f"正在切换到{template_name}（模板{template}）")
         
-        # 从配置中获取API URL
+        # 从配置中获取API URL和用户ID
         if handler_config:
-            user_id = handler_config.user_id
+            default_user_id = handler_config.user_id
             user_info_api_url = handler_config.user_info_api_url
             survey_api_url = handler_config.survey_api_url
         else:
             # 使用默认值
-            user_id = "4d8f3a08-e886-43ff-ba7f-93ca0a1b0f96"
+            default_user_id = "4d8f3a08-e886-43ff-ba7f-93ca0a1b0f96"
             user_info_api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/userInfo.do"
             survey_api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do"
         
+        # 详细排查用户ID获取逻辑
+        # logger.info(f"🔍 用户ID排查开始:")
+        # logger.info(f"  - context.user_id: {getattr(context, 'user_id', 'NOT_SET')}")
+        # logger.info(f"  - hasattr(context, 'user_id'): {hasattr(context, 'user_id')}")
+        # logger.info(f"  - context.user_id is not None: {getattr(context, 'user_id', None) is not None}")
+        # logger.info(f"  - context.user_id bool值: {bool(getattr(context, 'user_id', None))}")
+        # logger.info(f"  - handler_config.user_id: {default_user_id}")
+        
+        # 如果context中有用户ID，优先使用context中的
+        if hasattr(context, 'user_id') and context.user_id is not None and context.user_id.strip():
+            user_id = context.user_id
+            # logger.info(f"✅ 使用context中的用户ID: {user_id}")
+        else:
+            # 尝试从存储中获取最新的用户ID
+            try:
+                from src.utils.user_id_storage import get_user_id
+                # 尝试从多个可能的key获取用户ID
+                stored_user_id = None
+                
+                # 尝试从context的session_id获取
+                if hasattr(context, 'session_id'):
+                    stored_user_id = get_user_id(context.session_id)
+                    # logger.info(f"🔍 尝试从存储获取用户ID，session_id: {context.session_id}")
+                
+                if stored_user_id:
+                    user_id = stored_user_id
+                    # logger.info(f"✅ 从存储中获取到用户ID: {user_id}")
+                else:
+                    user_id = default_user_id
+                    logger.warning(f"⚠️ 使用默认用户ID: {user_id}")
+            except Exception as e:
+                logger.error(f"⚠️ 从存储获取用户ID失败: {e}")
+                user_id = default_user_id
+                logger.warning(f"⚠️ 使用默认用户ID: {user_id}")
+        
+        # logger.info(f"🎯 最终使用的用户ID: {user_id}")
+        
         # 获取用户信息和测评数据
+        logger.info(f"📞 开始获取用户信息，用户ID: {user_id}")
         user_info = get_user_info(user_id, user_info_api_url)
+        logger.info(f"📊 开始获取用户测评数据，用户ID: {user_id}")
         survey_data = get_user_survey_data(user_id, survey_api_url)
         
         # 使用指定模板
