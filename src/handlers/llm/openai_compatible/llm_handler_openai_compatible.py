@@ -25,11 +25,16 @@ _user_info_cache = {}
 
 def parse_survey_data(data_list: list) -> str:
     """
-    解析测评数据，提取简化的信息
-    只包含name字段和群体信息（健康群体、一般关注群体、重点关注群体）
+    解析测评数据，按群体分类组织数据
+    输出格式：重点关注: 项目1, 项目2; 一般关注: 项目3, 项目4; 健康: 项目5, 项目6
     自动去重，每个测评项目只保留一个结果
     """
-    simplified_data = {}
+    # 按群体分类存储数据，使用集合去重
+    group_categories = {
+        "重点关注": set(),
+        "一般关注": set(),
+        "健康": set()
+    }
     
     for item in data_list:
         if "name" not in item or "value" not in item:
@@ -45,22 +50,31 @@ def parse_survey_data(data_list: list) -> str:
         
         if match:
             group_info = match.group(1).strip()
-            simplified_data[name] = group_info
         else:
             # 如果没有找到标准格式，尝试其他可能的格式
             pattern2 = r'处于(.*?)群体'
             match2 = re.search(pattern2, value)
             if match2:
                 group_info = match2.group(1).strip()
-                simplified_data[name] = group_info
             else:
-                # 如果都没有找到，使用原始name
-                simplified_data[name] = "未分类"
+                # 如果都没有找到，跳过该项目
+                continue
+        
+        # 根据群体信息分类
+        if group_info == "重点关注":
+            group_categories["重点关注"].add(name)
+        elif group_info == "一般关注":
+            group_categories["一般关注"].add(name)
+        elif group_info == "健康":
+            group_categories["健康"].add(name)
     
-    # 将字典转换为格式化的字符串，确保顺序一致
+    # 构建输出字符串
     result_lines = []
-    for name, group_info in simplified_data.items():
-        result_lines.append(f"{name}: {group_info}")
+    for category, items in group_categories.items():
+        if items:  # 只添加非空的分类
+            # 将集合转换为排序的列表，确保输出顺序一致
+            sorted_items = sorted(list(items))
+            result_lines.append(f"{category}: {', '.join(sorted_items)}")
     
     return "\n".join(result_lines)
 
@@ -177,6 +191,8 @@ class LLMConfig(HandlerBaseConfigModel, BaseModel):
     user_id: str = Field(default="4d8f3a08-e886-43ff-ba7f-93ca0a1b0f96")
     survey_api_url: str = Field(default="https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do")
     user_info_api_url: str = Field(default="https://www.zhgk-mind.com/api/dwsurvey/anon/response/userInfo.do")
+    # 支持多个提示词模板
+    system_prompt_templates: Optional[Dict[str, str]] = Field(default=None)
 
 
 class LLMContext(HandlerContext):
@@ -194,6 +210,10 @@ class LLMContext(HandlerContext):
         self.current_image = None
         self.history = None
         self.enable_video_input = False
+        # 对话状态跟踪
+        self.is_first_interaction = True  # 标记是否为首次交互
+        self.system_prompt_templates = None
+        self.handler_config = None  # 存储配置信息
 
 
 class HandlerLLM(HandlerBase, ABC):
@@ -239,19 +259,41 @@ class HandlerLLM(HandlerBase, ABC):
             handler_config = LLMConfig()
         context = LLMContext(session_context.session_info.session_id)
         context.model_name = handler_config.model_name
+        context.system_prompt_templates = handler_config.system_prompt_templates
         
-        # 获取用户信息和测评数据并拼接到system_prompt中
+        # 存储配置信息，供后续使用
+        context.handler_config = handler_config
+        
+        # 获取用户信息和测评数据
         user_info = get_user_info(handler_config.user_id, handler_config.user_info_api_url)
         survey_data = get_user_survey_data(handler_config.user_id, handler_config.survey_api_url)
         
+        # 选择系统提示词模板
+        if context.system_prompt_templates and "B" in context.system_prompt_templates:
+            # 初始时使用模板B（对话模板）
+            base_prompt = context.system_prompt_templates["B"]
+        else:
+            # 使用默认提示词
+            base_prompt = handler_config.system_prompt
+        
         # 构建增强的系统提示
-        enhanced_parts = [handler_config.system_prompt]
+        enhanced_parts = [base_prompt]
         
         if user_info:
-            enhanced_parts.append(f"用户信息：\n{user_info}")
+            enhanced_parts.append(f"【用户信息】：\n{user_info}")
         
         if survey_data:
-            enhanced_parts.append(f"用户测评数据：\n{survey_data}")
+            enhanced_parts.append(f"【用户测评数据】：\n{survey_data}")
+
+        # 只在首次交互时添加开场白指令
+        if context.is_first_interaction:
+            enhanced_parts.append("""
+            
+            ---
+            
+            ### 7. 开始执行
+            请严格按照以上所有要求，特别是【当前任务】和【外部输入数据】，生成你的第一句开场白。
+            """)
         
         enhanced_system_prompt = "\n\n".join(enhanced_parts)
         context.system_prompt = {'role': 'system', 'content': enhanced_system_prompt}
@@ -267,6 +309,52 @@ class HandlerLLM(HandlerBase, ABC):
         )
         return context
     
+    def update_system_prompt_for_conversation(self, context: LLMContext, handler_config=None, template="B"):
+        """
+        更新系统提示词为指定模板
+        template: "A" 为开场白模式, "B" 为对话模式
+        """
+        if not context.system_prompt_templates or template not in context.system_prompt_templates:
+            logger.warning(f"无法切换到模板{template}：system_prompt_templates或模板{template}不存在")
+            return
+        
+        template_name = "开场白模式" if template == "A" else "对话模式"
+        logger.info(f"正在切换到{template_name}（模板{template}）")
+        
+        # 从配置中获取API URL
+        if handler_config:
+            user_id = handler_config.user_id
+            user_info_api_url = handler_config.user_info_api_url
+            survey_api_url = handler_config.survey_api_url
+        else:
+            # 使用默认值
+            user_id = "4d8f3a08-e886-43ff-ba7f-93ca0a1b0f96"
+            user_info_api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/userInfo.do"
+            survey_api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do"
+        
+        # 获取用户信息和测评数据
+        user_info = get_user_info(user_id, user_info_api_url)
+        survey_data = get_user_survey_data(user_id, survey_api_url)
+        
+        # 使用指定模板
+        base_prompt = context.system_prompt_templates[template]
+        
+        # 构建增强的系统提示
+        enhanced_parts = [base_prompt]
+        
+        if user_info:
+            enhanced_parts.append(f"【用户信息】：\n{user_info}")
+        
+        if survey_data:
+            enhanced_parts.append(f"【用户测评数据】：\n{survey_data}")
+        
+        enhanced_system_prompt = "\n\n".join(enhanced_parts)
+        context.system_prompt = {'role': 'system', 'content': enhanced_system_prompt}
+        
+        # 更新对话状态
+        context.is_first_interaction = False
+        logger.info(f"已成功切换到{template_name}（模板{template}）")
+    
     def start_context(self, session_context, handler_context):
         pass
 
@@ -274,6 +362,15 @@ class HandlerLLM(HandlerBase, ABC):
                output_definitions: Dict[ChatDataType, HandlerDataInfo]):
         output_definition = output_definitions.get(ChatDataType.AVATAR_TEXT).definition
         context = cast(LLMContext, context)
+        
+        # 如果是首次交互，在第一次处理用户输入前切换到开场白模式
+        template_switched = False
+        if context.is_first_interaction and inputs.type == ChatDataType.HUMAN_TEXT:
+            logger.info("首次用户输入，切换到开场白模式（模板A）")
+            # 使用存储的配置信息
+            self.update_system_prompt_for_conversation(context, context.handler_config, template="A")
+            template_switched = True
+        
         text = None
         if inputs.type == ChatDataType.CAMERA_VIDEO and context.enable_video_input:
             context.current_image = inputs.data.get_main_data()
@@ -301,6 +398,11 @@ class HandlerLLM(HandlerBase, ABC):
         current_content = context.history.generate_next_messages(chat_text, 
                                                                  [context.current_image] if context.current_image is not None else [])
         logger.debug(f'llm input {context.model_name} {current_content} ')
+        
+        # 如果模板已切换，记录新的系统提示词
+        if template_switched:
+            logger.info(f"使用更新后的系统提示词（模板A）: {context.system_prompt['content'][:100]}...")
+        
         try:
             completion = context.client.chat.completions.create(
                 model=context.model_name,  # 此处以qwen-plus为例，可按需更换模型名称。模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
