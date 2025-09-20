@@ -20,6 +20,7 @@ from handlers.llm.openai_compatible.chat_history_manager import ChatHistory, His
 
 # 全局缓存，避免重复请求
 _survey_data_cache = {}
+_user_info_cache = {}
 
 
 def parse_survey_data(data_list: list) -> str:
@@ -62,6 +63,74 @@ def parse_survey_data(data_list: list) -> str:
         result_lines.append(f"{name}: {group_info}")
     
     return "\n".join(result_lines)
+
+
+def parse_user_info(user_data: dict) -> str:
+    """
+    解析用户信息，提取指定字段
+    包含：姓名(name), 年级(nj)，班级(bj)，地址(addressCode)，性别（sex)， 学校名称（schoolName）
+    如为 null 则不解析
+    """
+    user_info_lines = []
+    
+    # 定义字段映射
+    field_mapping = {
+        'name': '姓名',
+        'nj': '年级', 
+        'bj': '班级',
+        'addressCode': '地址',
+        'sex': '性别',
+        'schoolName': '学校名称'
+    }
+    
+    # 性别映射
+    sex_mapping = {'1': '男', '2': '女', '0': '未知'}
+    
+    for field, display_name in field_mapping.items():
+        if field in user_data and user_data[field] is not None:
+            value = user_data[field]
+            # 特殊处理性别字段
+            if field == 'sex' and value in sex_mapping:
+                value = sex_mapping[value]
+            user_info_lines.append(f"{display_name}: {value}")
+    
+    return "\n".join(user_info_lines)
+
+
+def get_user_info(user_id: str, api_url: str) -> str:
+    """
+    获取用户信息并返回解析结果
+    使用缓存避免重复请求
+    """
+    # 检查缓存
+    cache_key = f"{user_id}_{api_url}"
+    if cache_key in _user_info_cache:
+        logger.debug(f"Using cached user info for user {user_id}")
+        return _user_info_cache[cache_key]
+    
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+            'Referer': 'https://www.zhgk-mind.com/'
+        }
+        
+        response = requests.get(f"{api_url}?userId={user_id}", headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get("resultCode") == 200 and "data" in result:
+            user_data = result["data"]
+            parsed_info = parse_user_info(user_data)
+            # 缓存结果
+            _user_info_cache[cache_key] = parsed_info
+            logger.info(f"Cached user info for user {user_id}")
+            return parsed_info
+        else:
+            logger.warning(f"Failed to get user info: {result.get('resultMsg', 'Unknown error')}")
+            return ""
+    except Exception as e:
+        logger.error(f"Error fetching user info: {e}")
+        return ""
 
 
 def get_user_survey_data(user_id: str, api_url: str) -> str:
@@ -107,6 +176,7 @@ class LLMConfig(HandlerBaseConfigModel, BaseModel):
     history_length: int = Field(default=20)
     user_id: str = Field(default="4d8f3a08-e886-43ff-ba7f-93ca0a1b0f96")
     survey_api_url: str = Field(default="https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do")
+    user_info_api_url: str = Field(default="https://www.zhgk-mind.com/api/dwsurvey/anon/response/userInfo.do")
 
 
 class LLMContext(HandlerContext):
@@ -170,13 +240,20 @@ class HandlerLLM(HandlerBase, ABC):
         context = LLMContext(session_context.session_info.session_id)
         context.model_name = handler_config.model_name
         
-        # 获取用户测评数据并拼接到system_prompt中
+        # 获取用户信息和测评数据并拼接到system_prompt中
+        user_info = get_user_info(handler_config.user_id, handler_config.user_info_api_url)
         survey_data = get_user_survey_data(handler_config.user_id, handler_config.survey_api_url)
+        
+        # 构建增强的系统提示
+        enhanced_parts = [handler_config.system_prompt]
+        
+        if user_info:
+            enhanced_parts.append(f"用户信息：\n{user_info}")
+        
         if survey_data:
-            enhanced_system_prompt = f"{handler_config.system_prompt}\n\n用户测评数据：\n{survey_data}"
-        else:
-            enhanced_system_prompt = handler_config.system_prompt
-            
+            enhanced_parts.append(f"用户测评数据：\n{survey_data}")
+        
+        enhanced_system_prompt = "\n\n".join(enhanced_parts)
         context.system_prompt = {'role': 'system', 'content': enhanced_system_prompt}
         print(context.system_prompt)
         context.api_key = handler_config.api_key
