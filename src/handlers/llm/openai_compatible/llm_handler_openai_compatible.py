@@ -181,6 +181,59 @@ def get_user_survey_data(user_id: str, api_url: str) -> str:
         return ""
 
 
+def call_rag_api(query: str, rag_api_url: str, rag_api_key: str, rag_model: str) -> str:
+    """
+    调用RAG API获取知识库回答
+    返回完整的回答内容，如果未找到则返回空字符串
+    """
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {rag_api_key}'
+        }
+        
+        data = {
+            "model": rag_model,
+            "messages": [{"role": "user", "content": query}],
+            "stream": True
+        }
+        
+        logger.info(f"调用RAG API，查询: {query[:50]}...")
+        response = requests.post(rag_api_url, headers=headers, json=data, timeout=30, stream=True)
+        response.raise_for_status()
+        
+        full_response = ""
+        for line in response.iter_lines():
+            if line:
+                line = line.decode('utf-8')
+                if line.startswith('data:'):
+                    try:
+                        json_data = json.loads(line[5:])  # 去掉 'data:' 前缀
+                        if (json_data.get('choices') and 
+                            len(json_data['choices']) > 0 and 
+                            json_data['choices'][0].get('delta', {}).get('content') is not None):
+                            content = json_data['choices'][0]['delta']['content']
+                            if content:  # 确保content不为空字符串
+                                full_response += content
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"JSON解析错误: {e}, 原始数据: {line}")
+                        continue
+        
+        # 检查是否返回了"知识库中未找到您要的答案"
+        if "知识库中未找到您要的答案" in full_response:
+            logger.info("RAG API返回：知识库中未找到相关答案")
+            return ""
+        
+        logger.info(f"RAG API返回答案，长度: {len(full_response)}")
+        if full_response:
+            logger.debug(f"RAG API返回内容: {full_response[:200]}...")
+        return full_response
+        
+    except Exception as e:
+        logger.error(f"RAG API调用失败: {e}")
+        return ""
+
+
 class LLMConfig(HandlerBaseConfigModel, BaseModel):
     model_name: str = Field(default="qwen-plus")
     system_prompt: str = Field(default="请你扮演一个 AI 助手，用简短的对话来回答用户的问题，并在对话内容中加入合适的标点符号，不需要加入标点符号相关的内容")
@@ -193,6 +246,11 @@ class LLMConfig(HandlerBaseConfigModel, BaseModel):
     user_info_api_url: str = Field(default="https://www.zhgk-mind.com/api/dwsurvey/anon/response/userInfo.do")
     # 支持多个提示词模板
     system_prompt_templates: Optional[Dict[str, str]] = Field(default=None)
+    # RAG配置
+    enable_rag: bool = Field(default=True)
+    rag_api_url: str = Field(default="https://ragflow.thinnovate.com/api/v1/chats_openai/9a15923a991b11f088f40242ac170006/chat/completions")
+    rag_api_key: str = Field(default="ragflow-")
+    rag_model: str = Field(default="model")
 
 
 class LLMContext(HandlerContext):
@@ -493,42 +551,77 @@ class HandlerLLM(HandlerBase, ABC):
         if template_switched:
             logger.info(f"使用更新后的系统提示词（模板A）: {context.system_prompt['content'][:100]}...")
         
-        try:
-            completion = context.client.chat.completions.create(
-                model=context.model_name,  # 此处以qwen-plus为例，可按需更换模型名称。模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
-                messages=[
-                    context.system_prompt,
-                ] + current_content,
-                stream=True,
-                stream_options={"include_usage": True}
+        # 优先尝试RAG获取答案
+        rag_response = ""
+        if context.handler_config and context.handler_config.enable_rag:
+            logger.info("尝试从RAG知识库获取答案...")
+            rag_response = call_rag_api(
+                chat_text, 
+                context.handler_config.rag_api_url,
+                context.handler_config.rag_api_key,
+                context.handler_config.rag_model
             )
+        
+        # 如果RAG返回了有效答案，直接使用RAG结果
+        if rag_response:
+            logger.info("使用RAG知识库答案")
             context.current_image = None
             context.input_texts = ''
-            context.output_texts = ''
-            for chunk in completion:
-                if (chunk and chunk.choices and chunk.choices[0] and chunk.choices[0].delta.content):
-                    output_text = chunk.choices[0].delta.content
-                    context.output_texts += output_text
-                    logger.info(output_text)
-                    output = DataBundle(output_definition)
-                    output.set_main_data(output_text)
-                    output.add_meta("avatar_text_end", False)
-                    output.add_meta("speech_id", speech_id)
-                    yield output
+            context.output_texts = rag_response
+            
+            # 模拟流式输出，将RAG结果分块输出
+            chunk_size = 10  # 每次输出10个字符
+            for i in range(0, len(rag_response), chunk_size):
+                output_text = rag_response[i:i+chunk_size]
+                logger.info(output_text)
+                output = DataBundle(output_definition)
+                output.set_main_data(output_text)
+                output.add_meta("avatar_text_end", False)
+                output.add_meta("speech_id", speech_id)
+                yield output
+            
+            # 添加对话历史
             context.history.add_message(HistoryMessage(role="human", content=chat_text))
             context.history.add_message(HistoryMessage(role="avatar", content=context.output_texts))
-        except Exception as e:
-            logger.error(e)
-            if (isinstance(e, APIStatusError)):
-                response = e.body
-                if isinstance(response, dict) and "message" in response:
-                    response = f"{response['message']}"
-            output_text = response 
-            output = DataBundle(output_definition)
-            output.set_main_data(output_text)
-            output.add_meta("avatar_text_end", False)
-            output.add_meta("speech_id", speech_id)
-            yield output
+        else:
+            # RAG未找到答案，调用大模型
+            logger.info("RAG未找到答案，调用大模型...")
+            try:
+                completion = context.client.chat.completions.create(
+                    model=context.model_name,  # 此处以qwen-plus为例，可按需更换模型名称。模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
+                    messages=[
+                        context.system_prompt,
+                    ] + current_content,
+                    stream=True,
+                    stream_options={"include_usage": True}
+                )
+                context.current_image = None
+                context.input_texts = ''
+                context.output_texts = ''
+                for chunk in completion:
+                    if (chunk and chunk.choices and chunk.choices[0] and chunk.choices[0].delta.content):
+                        output_text = chunk.choices[0].delta.content
+                        context.output_texts += output_text
+                        logger.info(output_text)
+                        output = DataBundle(output_definition)
+                        output.set_main_data(output_text)
+                        output.add_meta("avatar_text_end", False)
+                        output.add_meta("speech_id", speech_id)
+                        yield output
+                context.history.add_message(HistoryMessage(role="human", content=chat_text))
+                context.history.add_message(HistoryMessage(role="avatar", content=context.output_texts))
+            except Exception as e:
+                logger.error(e)
+                if (isinstance(e, APIStatusError)):
+                    response = e.body
+                    if isinstance(response, dict) and "message" in response:
+                        response = f"{response['message']}"
+                output_text = response 
+                output = DataBundle(output_definition)
+                output.set_main_data(output_text)
+                output.add_meta("avatar_text_end", False)
+                output.add_meta("speech_id", speech_id)
+                yield output
         context.input_texts = ''
         context.output_texts = ''
         logger.info('avatar text end')
