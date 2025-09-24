@@ -46,6 +46,8 @@ class RtcStream(AsyncAudioVideoStreamHandler):
 
         self.session_id = session_id
         self.stream_start_delay = stream_start_delay
+        self.user_id = None  # 用户ID，由WebRTC连接设置
+        self.webrtc_id = None  # WebRTC连接ID，用于从存储中获取用户ID
 
         self.chat_channel = None
         self.first_audio_emitted = False
@@ -164,6 +166,10 @@ class RtcStream(AsyncAudioVideoStreamHandler):
             super().set_channel(channel)
             self.chat_channel = channel
             
+            # 将用户ID传递给会话上下文
+            if self.user_id and self.client_session_delegate:
+                self._set_user_id_to_session_context()
+            
             async def process_chat_history():
                 role = None
                 chat_id = None
@@ -226,6 +232,51 @@ class RtcStream(AsyncAudioVideoStreamHandler):
 
                 # channel.send(json.dumps({"type": "chat", "unique_id": unique_id, "message": message}))
           
+    def _set_user_id_to_session_context(self):
+        """将用户ID设置到会话上下文中"""
+        try:
+            # logger.info(f"🔍 RtcStream 用户ID设置排查开始:")
+            # logger.info(f"  - self.user_id: {self.user_id}")
+            # logger.info(f"  - self.client_session_delegate: {self.client_session_delegate is not None}")
+            
+            # 如果self.user_id为空，尝试从存储中获取
+            if not self.user_id and hasattr(self, 'webrtc_id') and self.webrtc_id:
+                try:
+                    from src.utils.user_id_storage import get_user_id
+                    stored_user_id = get_user_id(self.webrtc_id)
+                    if stored_user_id:
+                        self.user_id = stored_user_id
+                        # logger.info(f"✅ 从存储中获取到用户ID: {self.user_id}")
+                    else:
+                        logger.warning(f"⚠️ 存储中未找到用户ID: webrtc_id={self.webrtc_id}")
+                except Exception as e:
+                    logger.error(f"⚠️ 从存储获取用户ID失败: {e}")
+            
+            if not self.client_session_delegate or not self.user_id:
+                logger.warning(f"⚠️ 无法设置用户ID: client_session_delegate={self.client_session_delegate is not None}, user_id={self.user_id}")
+                return
+                
+            # 获取会话上下文
+            session_context = getattr(self.client_session_delegate, 'session_context', None)
+            # logger.info(f"  - session_context: {session_context is not None}")
+            
+            if not session_context:
+                logger.warning("无法获取会话上下文")
+                return
+                
+            # 设置用户ID
+            if hasattr(session_context, 'update_user_id'):
+                session_context.update_user_id(self.user_id)
+            else:
+                old_user_id = getattr(session_context, 'user_id', None)
+                session_context.user_id = self.user_id
+                # logger.info(f"✅ 设置会话用户ID: {old_user_id} -> {self.user_id}")
+                    
+        except Exception as e:
+            logger.error(f"设置用户ID到会话上下文时发生错误: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     async def on_chat_datachannel(self, message: Dict, channel):
         # {"type":"chat",id:"标识属于同一段话", "message":"Hello, world!"}
         # unique_id = uuid.uuid4().hex

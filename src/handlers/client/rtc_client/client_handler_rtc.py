@@ -36,6 +36,7 @@ class RtcClientSessionDelegate(ClientSessionDelegate):
         self.timestamp_generator = None
         self.data_submitter = None
         self.shared_states = None
+        self.session_context = None  # 存储会话上下文
         self.output_queues = {
             EngineChannelType.AUDIO: asyncio.Queue(),
             EngineChannelType.VIDEO: asyncio.Queue(),
@@ -213,7 +214,7 @@ class ClientHandlerRtc(ClientHandlerBase):
                 gradio.components.HTML(
                     """
                     <h1 id="openavatarchat">
-                       The Gradio page is no longer available. Please use the openavatarchat-webui submodule instead.
+                       AI 数字人陪伴
                     </h1>
                     """,
                     visible=True
@@ -243,6 +244,7 @@ class ClientHandlerRtc(ClientHandlerBase):
         session_delegate.data_submitter = handler_context.data_submitter
         session_delegate.input_data_definitions = self.output_bundle_definitions
         session_delegate.shared_states = session_context.shared_states
+        session_delegate.session_context = session_context  # 设置会话上下文
 
         handler_context.client_session_delegate = session_delegate
 

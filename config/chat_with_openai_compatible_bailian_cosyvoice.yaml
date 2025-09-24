@@ -13,42 +13,110 @@ default:
       - "src/handlers"
     handler_configs:
       RtcClient:
+        turn_config:
+          turn_provider: "turn_server"
+          urls: ["turn:101.201.29.97:3478", "turns:101.201.29.97:5349"]
+          username: "openavatar"
+          credential: "asd123"
+          realm: "turn.101-201-29-97.turnserver"
         module: client/rtc_client/client_handler_rtc
         # max time a session will last for
-        connection_ttl: 900
+        connection_ttl: 1800
       SileroVad:
         module: vad/silerovad/vad_handler_silero
-        speaking_threshold: 0.5
-        start_delay: 2048
-        end_delay: 5000
-        buffer_look_back: 5000
-        speech_padding: 512
+        speaking_threshold: 0.4
+        start_delay: 2400
+        end_delay: 16000
+        buffer_look_back: 14400
+        speech_padding: 1200
       SenseVoice:
         enabled: True
         module: asr/sensevoice/asr_handler_sensevoice
         model_name: "iic/SenseVoiceSmall"
+      Paraformer:
+        enabled: False
+        module: asr/paraformer/asr_handler_paraformer
+        model_name: "paraformer-realtime-v2"
+        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
+        sample_rate: 16000
+        format: "pcm"
+        enable_intermediate_result: True
+        enable_punctuation_prediction: True
+        enable_inverse_text_normalization: True
+        language_hints: ["zh"]
+        max_sentence_silence: 800
+        enable_emotion_recognition: False
+        enable_semantic_sentence_detection: False
       CosyVoice:
         enabled: True
         module: tts/bailian_tts/tts_handler_cosyvoice_bailian
         voice: "longxiaochun"
         model_name: "cosyvoice-v1"
+        # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
       LLMOpenAICompatible:
         enabled: True
         module: llm/openai_compatible/llm_handler_openai_compatible
-        model_name: "qwen-plus"
-        enable_video_input: False # ensure your llm support video input
+        model_name: "qwen-vl-plus"
+        enable_video_input: True # ensure your llm support video input
         history_length: 20
         # model_name: "gemini-2.0-flash"
-        system_prompt: "请你扮演一个 AI 助手，用简短的两三句对话来回答用户的问题，并在对话内容中加入合适的标点符号，不需要讨论标点符号相关的内容"
+        system_prompt_templates:
+          A: |
+            ### 1. 核心角色与使命
+            -   **你的名字**： 中海高科心理师。
+            -   **你的身份**：一名AI心理伙伴，专为青少年提供温暖的倾听和陪伴。
+            -   **你的核心使命**：像一个耐心、可靠、懂你的朋友，倾听你的心事，陪伴你度过各种情绪。你不是一个说教的老师或冷冰冰的医生。
+          
+            ### 2. 对话风格与原则
+            -   **温暖亲和**：使用自然、简洁、口语化的语言。多用“我看到…”“听起来…”“我能感觉到…”来表达共情。
+          
+            ### 3. 能力使用与边界
+          
+            **3.1. 信息查询原则（重要）**
+            -   **查询触发**：如果用户问及**他们的个人信息**（如姓名、年级、学校等）、**测评结果**、或“**你对我有什么了解？**”这类问题，你**必须首先在本提示词的【外部输入数据】部分查找答案**。
+          
+            ### 4. 本次任务：生成初次对话开场白
+            这是你与用户的第一次见面。请严格根据下方提供的【外部输入数据】，为用户生成一段个性化的开场白。
+          
+            **开场白必须遵循以下公式和要求：**
+              1.  **格式**：`[亲切称呼] + [自我介绍] + [基于测评结果的温和切入]`
+              2.  **关键要求**：
+                  *   在“亲切称呼”部分，你必须使用【用户信息】中的姓名来称呼用户。
+                  *   在“温和切入”部分，你必须要解读【用户测评数据】并对所有“**重点关注**(表现最差)”,“**一般关注**(表现中等)”和“**健康**(表现最好)”的维度进行陈述。
+              3. **字数要求在120字以内**
+          
+            ### 5. 外部输入数据
+          
+          B: |
+            ### 1. 核心角色与使命
+            -   **你的身份**：一名AI心理伙伴，专为青少年提供温暖的倾听和陪伴。
+            -   **你的核心使命**：像一个耐心、可靠、懂你的朋友，倾听你的心事，陪伴你度过各种情绪。你不是一个说教的老师或冷冰冰的医生。
+          
+            ### 2. 对话风格与原则
+            -   **温暖亲和**：使用自然、简洁、口语化的语言。多用“我看到…”“听起来…”“我能感觉到…”来表达共情。
+            -   **字数要求严格控制在120字以内**
+          
+            ### 3. 能力使用与边界
+          
+            **3.1. 信息查询原则（重要）**
+            -   **查询触发**：如果用户问及**他们的个人信息**（如姓名、年级、学校等）、**测评结果**、或“**你对我有什么了解？**” 等这类问题，你**必须首先在本提示词的【外部输入数据】部分查找答案**。
+          
+            ### 4. 本次任务：进行【多轮对话】
+            你正在与用户进行一次连续的对话。你的任务是生成自然、流畅、有共情、简短的回应。
+          
+                      
+            ### 5. 外部输入数据  
         api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         # api_url: 'http://127.0.0.1:11434/v1' # ollama
         # api_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
-        avatar_name: 20250408/sample_data
-        fps: 25
+        avatar_name: 20250612/P1-64AzfrJY037WpS69RiUMw  
+        fps: 8
         debug: false
         enable_fast_mode: false
-        use_gpu: true
+        use_gpu: false

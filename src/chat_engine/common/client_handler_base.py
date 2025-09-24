@@ -65,6 +65,17 @@ class ClientHandlerDelegate:
             raise RuntimeError(msg)
         session_delegate = handler_env.handler_info.client_session_delegate_class()
         handler_env.handler.on_setup_session_delegate(session.session_context, handler_env.context, session_delegate)
+        
+        # 尝试从存储中获取用户ID并设置到会话上下文
+        try:
+            from src.utils.user_id_storage import get_user_id
+            stored_user_id = get_user_id(session_id)
+            if stored_user_id and hasattr(session.session_context, 'update_user_id'):
+                session.session_context.update_user_id(stored_user_id)
+                # logger.info(f"✅ 在会话创建时设置用户ID: {stored_user_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ 在会话创建时设置用户ID失败: {e}")
+        
         self.session_delegates[session_id] = session_delegate
         return session_delegate
 

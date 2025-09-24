@@ -25,6 +25,23 @@ class SessionContext(object):
         self.shared_states = SharedStates()
         self.input_definitions: Dict[EngineChannelType, DataBundleDefinition] = {}
         self.input_start_time: float = -1.0
+        
+        # 从session_info中提取用户ID
+        self.user_id = getattr(session_info, 'user_id', None)
+        
+        # 添加用户ID更新方法
+        self._user_id_updated = False
+    
+    def update_user_id(self, user_id: str):
+        """更新用户ID"""
+        old_user_id = self.user_id
+        self.user_id = user_id
+        self._user_id_updated = True
+        # logger.info(f"✅ SessionContext 用户ID已更新: {old_user_id} -> {user_id}")
+    
+    def is_user_id_updated(self) -> bool:
+        """检查用户ID是否已更新"""
+        return self._user_id_updated
 
     def get_input_audio_definition(self, sample_rate: int, channel_num: int = 1, entry_name: str = "mic_audio"):
         definition = self.input_definitions.get(EngineChannelType.AUDIO, None)
