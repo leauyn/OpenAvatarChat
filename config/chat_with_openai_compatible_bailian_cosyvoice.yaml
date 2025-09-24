@@ -37,7 +37,7 @@ default:
         enabled: False
         module: asr/paraformer/asr_handler_paraformer
         model_name: "paraformer-realtime-v2"
-        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
         sample_rate: 16000
         format: "pcm"
         enable_intermediate_result: True
@@ -53,7 +53,7 @@ default:
         voice: "longxiaochun"
         model_name: "cosyvoice-v1"
         # default=os.getenv("DASHSCOPE_API_KEY")
-        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
       LLMOpenAICompatible:
         enabled: True
@@ -112,7 +112,7 @@ default:
         # api_url: 'http://127.0.0.1:11434/v1' # ollama
         # api_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
         # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
-        api_key: "sk-c70f4210a7994069b92fed3d33deb5d7" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
         avatar_name: 20250612/P1-64AzfrJY037WpS69RiUMw  

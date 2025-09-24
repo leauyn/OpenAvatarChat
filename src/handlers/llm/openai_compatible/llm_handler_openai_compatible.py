@@ -459,9 +459,12 @@ class HandlerLLM(HandlerBase, ABC):
             template_switched = True
         
         text = None
+        # 检查是否为视频输入且启用了视频处理
         if inputs.type == ChatDataType.CAMERA_VIDEO and context.enable_video_input:
+            # 存储视频帧到上下文
             context.current_image = inputs.data.get_main_data()
-            return
+            return # 立即返回，不进行LLM调用
+        # 处理文本输入
         elif inputs.type == ChatDataType.HUMAN_TEXT:
             text = inputs.data.get_main_data()
         else:
