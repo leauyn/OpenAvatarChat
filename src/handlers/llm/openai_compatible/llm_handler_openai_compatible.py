@@ -582,14 +582,8 @@ class HandlerLLM(HandlerBase, ABC):
                             output.add_meta("speech_id", speech_id)
                             yield output
                 else:
-                    # 没有工具调用，直接输出已有的文本内容
-                    if context.output_texts:
-                        logger.info("没有工具调用，输出已有内容")
-                        output = DataBundle(output_definition)
-                        output.set_main_data(context.output_texts)
-                        output.add_meta("avatar_text_end", False)
-                        output.add_meta("speech_id", speech_id)
-                        yield output
+                    # 没有工具调用，流式输出已经在上面处理了，这里不需要重复输出
+                    logger.info("没有工具调用，流式输出已完成")
                 
                 context.history.add_message(HistoryMessage(role="human", content=chat_text))
                 context.history.add_message(HistoryMessage(role="avatar", content=context.output_texts))
