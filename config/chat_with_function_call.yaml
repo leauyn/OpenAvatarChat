@@ -37,7 +37,7 @@ default:
         enabled: False
         module: asr/paraformer/asr_handler_paraformer
         model_name: "paraformer-realtime-v2"
-        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-e63723d31555420d9b637f76a93a8e6a"
         sample_rate: 16000
         format: "pcm"
         enable_intermediate_result: True
@@ -52,21 +52,16 @@ default:
         module: tts/bailian_tts/tts_handler_cosyvoice_bailian
         voice: "longxiaochun"
         model_name: "cosyvoice-v1"
-        # default=os.getenv("DASHSCOPE_API_KEY")
-        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
-        # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: "sk-e63723d31555420d9b637f76a93a8e6a"
       LLMOpenAICompatible:
         enabled: True
         module: llm/openai_compatible/llm_handler_openai_compatible
-        model_name: "qwen3-vl-plus"
-        enable_video_input: True # ensure your llm support video input
+        model_name: "qwen-plus"
+        enable_video_input: True
         history_length: 20
-        # RAG配置
-        enable_rag: True  # 启用RAG功能
-        rag_api_url: "https://ragflow.thinnovate.com/api/v1/chats_openai/9a15923a991b11f088f40242ac170006/chat/completions"
-        rag_api_key: "ragflow-I5ZWIyNDk0OTg3MDExZjBiZWNlMDI0Mm"
-        rag_model: "model"
-        # model_name: "gemini-2.0-flash"
+        # 禁用RAG，专注于测试Function Call
+        enable_rag: False
+        # 系统提示词模板，包含工具使用说明
         system_prompt_templates:
           A: |
             ### 1. 核心角色与使命
@@ -93,6 +88,13 @@ default:
                   *   根据获取到的信息生成个性化的开场白
               3. **字数要求在120字以内**
           
+            ### 5. 工具使用说明
+            你可以使用以下工具来获取用户信息：
+            1. get_user_info: 获取用户基本信息（姓名、性别、年龄、地址、学校等）
+            2. get_user_survey_data: 获取用户测评数据（重点关注、一般关注、健康等）
+            
+            当用户询问个人信息或测评结果时，请主动调用相应的工具获取最新数据。
+          
           B: |
             ### 1. 核心角色与使命
             -   **你的身份**：一名AI心理伙伴，专为青少年提供温暖的倾听和陪伴。
@@ -116,11 +118,8 @@ default:
             2. get_user_survey_data: 获取用户测评数据（重点关注、一般关注、健康等）
             
             当用户询问个人信息或测评结果时，请主动调用相应的工具获取最新数据。
-        api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        # api_url: 'http://127.0.0.1:11434/v1' # ollama
-        # api_url: 'https://generativelanguage.googleapis.com/v1beta/openai/'
-        # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
-        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_url: "https://dashscope.aliyun.com/compatible-mode/v1"
+        api_key: "sk-e63723d31555420d9b637f76a93a8e6a"
       LiteAvatar:
         module: avatar/liteavatar/avatar_handler_liteavatar
         avatar_name: 20250612/P1-64AzfrJY037WpS69RiUMw  

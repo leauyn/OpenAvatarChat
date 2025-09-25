@@ -8,14 +8,16 @@ from engine_utils.media_utils import ImageUtils
 
 @dataclass
 class HistoryMessage:
-    role: Optional[Literal['avatar', 'human']] = None
+    role: Optional[Literal['avatar', 'human', 'tool']] = None
     content: str = ''
     timestamp: Optional[str] = None
+    tool_call_id: Optional[str] = None
 
 
 name_dict = {
     "avatar": "assistant",
-    "human": "user"
+    "human": "user",
+    "tool": "tool"
 }
 
 
@@ -39,10 +41,15 @@ class ChatHistory:
 
     def generate_next_messages(self, chat_text, images):
         def history_to_message(history: HistoryMessage):
-            return {
+            message = {
                 "role": name_dict[history.role],
                 "content": filter_text(history.content),
             }
+            # 如果是工具消息，添加tool_call_id
+            if history.role == "tool" and history.tool_call_id:
+                message["tool_call_id"] = history.tool_call_id
+            return message
+        
         history = self.message_history
         messages = list(map(history_to_message, history))
         if images and len(images) > 0:

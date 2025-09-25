@@ -17,6 +17,7 @@ from chat_engine.data_models.chat_data_type import ChatDataType
 from chat_engine.contexts.session_context import SessionContext
 from chat_engine.data_models.runtime_data.data_bundle import DataBundle, DataBundleDefinition, DataBundleEntry
 from handlers.llm.openai_compatible.chat_history_manager import ChatHistory, HistoryMessage
+from handlers.llm.openai_compatible.tools import tools, get_user_info as tool_get_user_info, get_user_survey_data as tool_get_user_survey_data
 
 # 全局缓存，避免重复请求
 _survey_data_cache = {}
@@ -179,6 +180,28 @@ def get_user_survey_data(user_id: str, api_url: str) -> str:
     except Exception as e:
         logger.error(f"Error fetching user survey data: {e}")
         return ""
+
+
+def execute_tool_call(tool_call):
+    """
+    执行工具调用
+    """
+    function_name = tool_call.function.name
+    function_args = json.loads(tool_call.function.arguments)
+    
+    logger.info(f"执行工具调用: {function_name}, 参数: {function_args}")
+    
+    if function_name == "get_user_info":
+        user_id = function_args.get("user_id", "")
+        result = tool_get_user_info(user_id)
+    elif function_name == "get_user_survey_data":
+        user_id = function_args.get("user_id", "")
+        result = tool_get_user_survey_data(user_id)
+    else:
+        result = f"未知的工具调用: {function_name}"
+    
+    logger.info(f"工具调用结果: {result}")
+    return result
 
 
 def call_rag_api(query: str, rag_api_url: str, rag_api_key: str, rag_model: str) -> str:
@@ -362,10 +385,6 @@ class HandlerLLM(HandlerBase, ABC):
         # 将用户ID存储到context中
         context.user_id = user_id
         
-        # 获取用户信息和测评数据
-        user_info = get_user_info(user_id, handler_config.user_info_api_url)
-        survey_data = get_user_survey_data(user_id, handler_config.survey_api_url)
-        
         # 选择系统提示词模板
         if context.system_prompt_templates and "B" in context.system_prompt_templates:
             # 初始时使用模板B（对话模板）
@@ -377,11 +396,16 @@ class HandlerLLM(HandlerBase, ABC):
         # 构建增强的系统提示
         enhanced_parts = [base_prompt]
         
-        if user_info:
-            enhanced_parts.append(f"【用户信息】：\n{user_info}")
+        # 添加工具调用说明
+        enhanced_parts.append("""
         
-        if survey_data:
-            enhanced_parts.append(f"【用户测评数据】：\n{survey_data}")
+        ### 工具使用说明
+        你可以使用以下工具来获取用户信息：
+        1. get_user_info: 获取用户基本信息（姓名、性别、年龄、地址、学校等）
+        2. get_user_survey_data: 获取用户测评数据（重点关注、一般关注、健康等）
+        
+        当用户询问个人信息或测评结果时，请主动调用相应的工具获取最新数据。
+        """)
 
         # 只在首次交互时添加开场白指令
         if context.is_first_interaction:
@@ -390,7 +414,8 @@ class HandlerLLM(HandlerBase, ABC):
             ---
             
             ### 6. 开始执行
-            请严格按照以上所有要求，特别是【本次任务】和【外部输入数据】，生成你的第一句开场白。
+            请严格按照以上所有要求，特别是【本次任务】，生成你的第一句开场白。
+            如果需要用户信息或测评数据，请先调用相应的工具获取。
             """)
         else:
             enhanced_parts.append("""
@@ -398,7 +423,8 @@ class HandlerLLM(HandlerBase, ABC):
             ---
             
             ### 6. 开始执行
-            请严格按照以上所有要求，特别是【本次任务】和【外部输入数据】，生成你的回应。
+            请严格按照以上所有要求，特别是【本次任务】，生成你的回应。
+            如果需要用户信息或测评数据，请先调用相应的工具获取。
             """)
         
         enhanced_system_prompt = "\n\n".join(enhanced_parts)
@@ -475,23 +501,22 @@ class HandlerLLM(HandlerBase, ABC):
         
         # logger.info(f"🎯 最终使用的用户ID: {user_id}")
         
-        # 获取用户信息和测评数据
-        logger.info(f"📞 开始获取用户信息，用户ID: {user_id}")
-        user_info = get_user_info(user_id, user_info_api_url)
-        logger.info(f"📊 开始获取用户测评数据，用户ID: {user_id}")
-        survey_data = get_user_survey_data(user_id, survey_api_url)
-        
         # 使用指定模板
         base_prompt = context.system_prompt_templates[template]
         
         # 构建增强的系统提示
         enhanced_parts = [base_prompt]
         
-        if user_info:
-            enhanced_parts.append(f"【用户信息】：\n{user_info}")
+        # 添加工具调用说明
+        enhanced_parts.append("""
         
-        if survey_data:
-            enhanced_parts.append(f"【用户测评数据】：\n{survey_data}")
+        ### 工具使用说明
+        你可以使用以下工具来获取用户信息：
+        1. get_user_info: 获取用户基本信息（姓名、性别、年龄、地址、学校等）
+        2. get_user_survey_data: 获取用户测评数据（重点关注、一般关注、健康等）
+        
+        当用户询问个人信息或测评结果时，请主动调用相应的工具获取最新数据。
+        """)
         
         enhanced_system_prompt = "\n\n".join(enhanced_parts)
         context.system_prompt = {'role': 'system', 'content': enhanced_system_prompt}
@@ -592,30 +617,144 @@ class HandlerLLM(HandlerBase, ABC):
                     messages=[
                         context.system_prompt,
                     ] + current_content,
+                    tools=tools,  # 添加工具定义
+                    tool_choice="auto",  # 自动选择工具
                     stream=True,
                     stream_options={"include_usage": True}
                 )
                 context.current_image = None
                 context.input_texts = ''
                 context.output_texts = ''
+                
+                # 处理流式响应，支持工具调用
+                tool_calls = []
                 for chunk in completion:
-                    if (chunk and chunk.choices and chunk.choices[0] and chunk.choices[0].delta.content):
-                        output_text = chunk.choices[0].delta.content
-                        context.output_texts += output_text
-                        logger.info(output_text)
+                    if chunk and chunk.choices and chunk.choices[0]:
+                        choice = chunk.choices[0]
+                        
+                        # 处理工具调用
+                        if choice.delta.tool_calls:
+                            for tool_call in choice.delta.tool_calls:
+                                if tool_call.id not in [tc.id for tc in tool_calls]:
+                                    tool_calls.append(tool_call)
+                                else:
+                                    # 更新现有工具调用
+                                    for i, existing_tc in enumerate(tool_calls):
+                                        if existing_tc.id == tool_call.id:
+                                            if tool_call.function:
+                                                if not existing_tc.function:
+                                                    existing_tc.function = tool_call.function
+                                                else:
+                                                    if tool_call.function.name:
+                                                        existing_tc.function.name = tool_call.function.name
+                                                    if tool_call.function.arguments:
+                                                        # 确保arguments不为None
+                                                        if existing_tc.function.arguments is None:
+                                                            existing_tc.function.arguments = tool_call.function.arguments
+                                                        else:
+                                                            existing_tc.function.arguments += tool_call.function.arguments
+                                            break
+                        
+                        # 处理普通文本输出
+                        if choice.delta.content:
+                            output_text = choice.delta.content
+                            context.output_texts += output_text
+                            logger.info(output_text)
+                            output = DataBundle(output_definition)
+                            output.set_main_data(output_text)
+                            output.add_meta("avatar_text_end", False)
+                            output.add_meta("speech_id", speech_id)
+                            yield output
+                
+                # 执行工具调用
+                if tool_calls:
+                    logger.info(f"检测到 {len(tool_calls)} 个工具调用")
+                    
+                    # 构建assistant消息，包含工具调用
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": context.output_texts or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            } for tc in tool_calls if tc.function
+                        ]
+                    }
+                    
+                    # 执行工具调用并收集结果
+                    tool_results = []
+                    for tool_call in tool_calls:
+                        if tool_call.function:
+                            tool_result = execute_tool_call(tool_call)
+                            tool_results.append(tool_result)
+                            
+                            # 将工具调用结果添加到对话历史
+                            context.history.add_message(HistoryMessage(
+                                role="tool", 
+                                content=tool_result,
+                                tool_call_id=tool_call.id
+                            ))
+                            
+                            logger.info(f"工具调用结果: {tool_result}")
+                    
+                    # 构建包含工具调用和结果的完整消息列表
+                    messages_with_tools = [context.system_prompt] + current_content + [assistant_message]
+                    
+                    # 添加工具结果消息
+                    for i, tool_call in enumerate(tool_calls):
+                        if i < len(tool_results):
+                            messages_with_tools.append({
+                                "role": "tool",
+                                "content": tool_results[i],
+                                "tool_call_id": tool_call.id
+                            })
+                    
+                    # 让大模型基于工具调用结果生成最终回答
+                    logger.info("基于工具调用结果生成最终回答...")
+                    final_completion = context.client.chat.completions.create(
+                        model=context.model_name,
+                        messages=messages_with_tools,
+                        stream=True,
+                        stream_options={"include_usage": True}
+                    )
+                    
+                    # 清空之前的输出，准备输出最终结果
+                    context.output_texts = ''
+                    
+                    for chunk in final_completion:
+                        if chunk and chunk.choices and chunk.choices[0] and chunk.choices[0].delta.content:
+                            output_text = chunk.choices[0].delta.content
+                            context.output_texts += output_text
+                            logger.info(output_text)
+                            output = DataBundle(output_definition)
+                            output.set_main_data(output_text)
+                            output.add_meta("avatar_text_end", False)
+                            output.add_meta("speech_id", speech_id)
+                            yield output
+                else:
+                    # 没有工具调用，直接输出已有的文本内容
+                    if context.output_texts:
+                        logger.info("没有工具调用，输出已有内容")
                         output = DataBundle(output_definition)
-                        output.set_main_data(output_text)
+                        output.set_main_data(context.output_texts)
                         output.add_meta("avatar_text_end", False)
                         output.add_meta("speech_id", speech_id)
                         yield output
+                
                 context.history.add_message(HistoryMessage(role="human", content=chat_text))
                 context.history.add_message(HistoryMessage(role="avatar", content=context.output_texts))
             except Exception as e:
                 logger.error(e)
+                response = "抱歉，处理您的请求时出现了错误，请稍后再试。"
                 if (isinstance(e, APIStatusError)):
-                    response = e.body
-                    if isinstance(response, dict) and "message" in response:
-                        response = f"{response['message']}"
+                    error_body = e.body
+                    if isinstance(error_body, dict) and "message" in error_body:
+                        response = f"API错误: {error_body['message']}"
                 output_text = response 
                 output = DataBundle(output_definition)
                 output.set_main_data(output_text)
