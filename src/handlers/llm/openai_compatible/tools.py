@@ -41,6 +41,23 @@ tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_knowledge_base",
+            "description": "当用户询问任何心理健康、心理理论、心理咨询、心理疾病、心理症状、心理测评、心理治疗方法、心理干预等相关问题时，必须使用此工具查询专业知识库获取权威答案。这是获取专业心理知识的唯一途径。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "要查询的心理健康相关问题，如心理理论、咨询方法、测评知识等。",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 def parse_survey_data(data_list: list) -> str:
@@ -204,4 +221,73 @@ def get_user_survey_data(user_id: str) -> str:
             return ""
     except Exception as e:
         logger.error(f"Error fetching user survey data: {e}")
+        return ""
+
+
+def query_knowledge_base(query: str, rag_api_url: str = None, rag_api_key: str = None, rag_model: str = None) -> str:
+    """
+    查询知识库获取专业心理知识答案
+    返回完整的回答内容，如果未找到则返回空字符串
+    """
+    # 默认RAG配置
+    default_rag_api_url = "https://ragflow.thinnovate.com/api/v1/chats_openai/9a15923a991b11f088f40242ac170006/chat/completions"
+    default_rag_api_key = "ragflow-I5ZWIyNDk0OTg3MDExZjBiZWNlMDI0Mm"
+    default_rag_model = "model"
+    
+    # 使用传入的参数或默认值
+    api_url = rag_api_url or default_rag_api_url
+    api_key = rag_api_key or default_rag_api_key
+    model = rag_model or default_rag_model
+    
+    logger.info(f"🧠 RAG工具调用开始")
+    logger.info(f"📝 查询问题: {query}")
+    logger.info(f"🔗 API URL: {api_url}")
+    logger.info(f"🔑 API Key: {api_key[:20]}...")
+    logger.info(f"🤖 Model: {model}")
+    
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
+        
+        data = {
+            "model": model,
+            "messages": [{"role": "user", "content": query}],
+            "stream": True
+        }
+        
+        logger.info(f"查询知识库，问题: {query[:50]}...")
+        response = requests.post(api_url, headers=headers, json=data, timeout=30, stream=True)
+        response.raise_for_status()
+        
+        full_response = ""
+        for line in response.iter_lines():
+            if line:
+                line = line.decode('utf-8')
+                if line.startswith('data:'):
+                    try:
+                        json_data = json.loads(line[5:])  # 去掉 'data:' 前缀
+                        if (json_data.get('choices') and 
+                            len(json_data['choices']) > 0 and 
+                            json_data['choices'][0].get('delta', {}).get('content') is not None):
+                            content = json_data['choices'][0]['delta']['content']
+                            if content:  # 确保content不为空字符串
+                                full_response += content
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"JSON解析错误: {e}, 原始数据: {line}")
+                        continue
+        
+        # 检查是否返回了"知识库中未找到您要的答案"
+        if "知识库中未找到您要的答案" in full_response:
+            logger.warning("⚠️ 知识库中未找到相关答案")
+            return ""
+        
+        logger.info(f"✅ 知识库查询成功，返回答案长度: {len(full_response)} 字符")
+        if full_response:
+            logger.info(f"📄 知识库返回内容预览: {full_response[:200]}...")
+        return full_response
+        
+    except Exception as e:
+        logger.error(f"❌ 知识库查询失败: {e}")
         return ""
