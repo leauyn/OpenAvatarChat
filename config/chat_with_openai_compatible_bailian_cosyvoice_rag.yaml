@@ -1,6 +1,11 @@
 default:
   logger:
     log_level: "INFO"
+    # LLM模块专用日志配置
+    llm_log_file: "logs/llm_handler.log"
+    llm_log_level: "DEBUG"
+    llm_log_rotation: "50 MB"
+    llm_log_retention: 30
   service:
     host: "0.0.0.0"
     port: 8282
