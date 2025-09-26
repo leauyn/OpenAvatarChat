@@ -8,16 +8,18 @@ from engine_utils.media_utils import ImageUtils
 
 @dataclass
 class HistoryMessage:
-    role: Optional[Literal['avatar', 'human', 'tool']] = None
+    role: Optional[Literal['avatar', 'human', 'tool', 'assistant']] = None
     content: str = ''
     timestamp: Optional[str] = None
     tool_call_id: Optional[str] = None
+    tool_calls: Optional[list] = None  # 存储工具调用信息
 
 
 name_dict = {
     "avatar": "assistant",
     "human": "user",
-    "tool": "tool"
+    "tool": "tool",
+    "assistant": "assistant"
 }
 
 
@@ -48,6 +50,9 @@ class ChatHistory:
             # 如果是工具消息，添加tool_call_id
             if history.role == "tool" and history.tool_call_id:
                 message["tool_call_id"] = history.tool_call_id
+            # 如果是assistant消息且包含工具调用，添加tool_calls
+            if history.role == "assistant" and history.tool_calls:
+                message["tool_calls"] = history.tool_calls
             return message
         
         history = self.message_history

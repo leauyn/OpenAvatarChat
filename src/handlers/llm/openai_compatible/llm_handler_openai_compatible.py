@@ -213,33 +213,12 @@ class HandlerLLM(HandlerBase, ABC):
         # 构建增强的系统提示
         enhanced_parts = [base_prompt]
         
-        # 添加工具调用说明
-        enhanced_parts.append(f"""
-        
-        ### 工具使用说明
-        你可以使用以下工具来获取信息：
-        1. get_user_info: 获取用户基本信息（姓名、性别、年龄、地址、学校等）
-        2. get_user_survey_data: 获取用户测评数据（重点关注、一般关注、健康等）
-        3. query_knowledge_base: 查询专业知识库，获取心理陪伴、心理咨询、专业理论、心理健康知识、心理测评相关的权威答案
-        
-        **工具使用策略：**
-        - 当用户询问个人信息或测评结果时，请主动调用 get_user_info 或 get_user_survey_data 获取最新数据
-        - 当用户询问心理陪伴、心理咨询、专业理论、心理健康知识、心理测评相关问题时，请主动调用 query_knowledge_base 获取专业答案
-        - 对于日常对话、情感交流、生活话题等，直接使用你的知识进行回答，无需调用工具
-        - 如果知识库查询未找到答案，请基于你的通用知识给出合理的解答
-        
-        **重要提醒：**
-        - 对于任何涉及心理健康、心理理论、心理咨询方法、心理疾病症状、心理测评知识的问题，都必须先调用 query_knowledge_base 工具
-        - 不要直接回答专业心理问题，而是先查询知识库获取权威答案
-        - 只有在知识库没有相关答案时，才使用你的通用知识进行回答
-        
-        **强制工具调用规则：**
-        - 当用户提到"心理"、"抑郁"、"焦虑"、"治疗"、"症状"、"咨询"、"测评"、"干预"等关键词时，必须调用 query_knowledge_base
-        - 当用户询问"什么是"、"如何"、"为什么"等关于心理概念的问题时，必须调用 query_knowledge_base
-        - 当用户需要专业建议或治疗方法时，必须调用 query_knowledge_base
-        
-        **重要：当前用户ID是 {user_id}，调用用户相关工具时请使用此ID作为user_id参数。**
-        """)
+        # 添加用户ID信息（如果模板中没有包含）
+        if "当前用户ID" not in base_prompt:
+            enhanced_parts.append(f"""
+            
+            **重要：当前用户ID是 {user_id}，调用用户相关工具时请使用此ID作为user_id参数。**
+            """)
 
         # 只在首次交互时添加开场白指令
         if context.is_first_interaction:
@@ -265,6 +244,14 @@ class HandlerLLM(HandlerBase, ABC):
         
         enhanced_system_prompt = "\n\n".join(enhanced_parts)
         context.system_prompt = {'role': 'system', 'content': enhanced_system_prompt}
+        
+        # 调试日志：检查系统提示词是否包含RAG工具说明
+        if "query_knowledge_base" in enhanced_system_prompt:
+            logger.info("✅ 系统提示词包含RAG工具说明")
+        else:
+            logger.warning("⚠️ 系统提示词缺少RAG工具说明")
+        
+        logger.info(f"📝 系统提示词长度: {len(enhanced_system_prompt)} 字符")
         print(context.system_prompt)
         context.api_key = handler_config.api_key
         context.api_url = handler_config.api_url
@@ -343,26 +330,23 @@ class HandlerLLM(HandlerBase, ABC):
         # 构建增强的系统提示
         enhanced_parts = [base_prompt]
         
-        # 添加工具调用说明
-        enhanced_parts.append(f"""
-        
-        ### 工具使用说明
-        你可以使用以下工具来获取信息：
-        1. get_user_info: 获取用户基本信息（姓名、性别、年龄、地址、学校等）
-        2. get_user_survey_data: 获取用户测评数据（重点关注、一般关注、健康等）
-        3. query_knowledge_base: 查询专业知识库，获取心理陪伴、心理咨询、专业理论、心理健康知识、心理测评(非测评结果或报告)相关的权威答案
-        
-        **工具使用策略：**
-        - 当用户询问个人信息或测评结果时，请主动调用 get_user_info 或 get_user_survey_data 获取最新数据
-        - 当用户询问心理陪伴、心理咨询、专业理论、心理健康知识、心理测评(非测评结果或报告)相关问题时，请主动调用 query_knowledge_base 获取专业答案
-        - 对于日常对话、情感交流、生活话题等，直接使用你的知识进行回答，无需调用工具
-        - 如果知识库查询未找到答案，请基于你的通用知识给出合理的解答
-        
-        **重要：当前用户ID是 {user_id}，调用用户相关工具时请使用此ID作为user_id参数。**
-        """)
+        # 添加用户ID信息（如果模板中没有包含）
+        if "当前用户ID" not in base_prompt:
+            enhanced_parts.append(f"""
+            
+            **重要：当前用户ID是 {user_id}，调用用户相关工具时请使用此ID作为user_id参数。**
+            """)
         
         enhanced_system_prompt = "\n\n".join(enhanced_parts)
         context.system_prompt = {'role': 'system', 'content': enhanced_system_prompt}
+        
+        # 调试日志：检查系统提示词是否包含RAG工具说明
+        if "query_knowledge_base" in enhanced_system_prompt:
+            logger.info("✅ 更新后的系统提示词包含RAG工具说明")
+        else:
+            logger.warning("⚠️ 更新后的系统提示词缺少RAG工具说明")
+        
+        logger.info(f"📝 更新后的系统提示词长度: {len(enhanced_system_prompt)} 字符")
         
         # 更新对话状态
         context.is_first_interaction = False
@@ -413,6 +397,7 @@ class HandlerLLM(HandlerBase, ABC):
         logger.info(f'llm input {context.model_name} {chat_text} ')
         current_content = context.history.generate_next_messages(chat_text, 
                                                                  [context.current_image] if context.current_image is not None else [])
+        logger.info(f"📚 对话历史长度: {len(current_content)} 条消息")
         logger.debug(f'llm input {context.model_name} {current_content} ')
         
         # 如果模板已切换，记录新的系统提示词
@@ -506,6 +491,15 @@ class HandlerLLM(HandlerBase, ABC):
                     ]
                 }
                 
+                # 将assistant的工具调用消息添加到对话历史
+                assistant_history_message = HistoryMessage(
+                    role="assistant",
+                    content=context.output_texts or "",
+                    tool_calls=assistant_message["tool_calls"]
+                )
+                context.history.add_message(assistant_history_message)
+                logger.info(f"📝 已添加assistant工具调用消息到对话历史，包含 {len(assistant_message['tool_calls'])} 个工具调用")
+                
                 # 执行工具调用并收集结果
                 tool_results = []
                 for i, tool_call in enumerate(tool_calls):
@@ -563,8 +557,19 @@ class HandlerLLM(HandlerBase, ABC):
                 logger.info(f"📝 用户输入: {chat_text[:100]}...")
                 logger.info("💡 提示：如果这是心理相关问题，模型应该调用 query_knowledge_base 工具")
             
+            # 添加对话历史
             context.history.add_message(HistoryMessage(role="human", content=chat_text))
-            context.history.add_message(HistoryMessage(role="avatar", content=context.output_texts))
+            
+            # 只有在没有工具调用时才添加avatar消息到历史
+            # 如果有工具调用，assistant消息已经在上面添加了
+            if not tool_calls:
+                context.history.add_message(HistoryMessage(role="avatar", content=context.output_texts))
+                logger.info("📝 已添加avatar消息到对话历史")
+            else:
+                # 如果有工具调用，添加最终回答的avatar消息
+                final_avatar_message = HistoryMessage(role="avatar", content=context.output_texts)
+                context.history.add_message(final_avatar_message)
+                logger.info("📝 已添加最终回答的avatar消息到对话历史")
         except Exception as e:
             logger.error(e)
             response = "抱歉，处理您的请求时出现了错误，请稍后再试。"
