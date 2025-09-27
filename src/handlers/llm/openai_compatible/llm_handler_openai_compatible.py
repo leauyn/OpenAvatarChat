@@ -23,6 +23,78 @@ from handlers.llm.openai_compatible.tools import tools, get_user_info as tool_ge
 _survey_data_cache = {}
 _user_info_cache = {}
 
+# 视觉相关判断的系统提示词
+VISUAL_DETECTION_SYSTEM_PROMPT = """
+你是一个意图识别助手。
+你的任务是判断用户的输入文本是否与当前对话中展示的图像或视频内容相关。
+你必须只返回一个JSON对象，格式为：{"is_visual_related": boolean}。
+不要添加任何解释或额外的文本。
+"""
+
+def create_visual_detection_prompt(chat_text: str) -> str:
+    """创建视觉检测的用户提示词"""
+    return f"""
+上下文：当前对话中存在一张图片。
+用户输入："{chat_text}"
+
+根据以上信息，判断用户的输入是否与图片相关。
+"""
+
+def is_visual_related_llm(chat_text: str, api_key: str, api_url: str, model_name: str = "qwen-flash") -> bool:
+    """
+    使用大模型判断用户输入是否与视觉内容相关
+    
+    Args:
+        chat_text: 用户输入的文本
+        api_key: API密钥
+        api_url: API地址
+        model_name: 模型名称，默认为qwen-plus
+    
+    Returns:
+        bool: 是否与视觉内容相关
+    """
+    if not chat_text or not chat_text.strip():
+        return False
+    
+    user_prompt = create_visual_detection_prompt(chat_text)
+    
+    try:
+        # 创建临时的OpenAI客户端用于视觉检测
+        visual_client = OpenAI(
+            api_key=api_key,
+            base_url=api_url,
+        )
+        
+        logger.info(f"🔍 使用大模型判断视觉相关性: {chat_text[:50]}...")
+        
+        completion = visual_client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": VISUAL_DETECTION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            # 开启JSON模式，让模型强制输出JSON格式
+            response_format={"type": "json_object"},
+            temperature=0.0,  # 对于分类任务，温度设为0以获得稳定结果
+        )
+        
+        response_content = completion.choices[0].message.content
+        logger.info(f"📤 视觉检测模型响应: {response_content}")
+        
+        # 解析模型返回的JSON字符串
+        result = json.loads(response_content)
+        
+        # 安全地获取布尔值
+        is_visual = result.get("is_visual_related", False)
+        logger.info(f"🎯 视觉相关性判断结果: {is_visual}")
+        
+        return is_visual
+
+    except Exception as e:
+        logger.error(f"❌ 视觉相关性判断失败: {e}")
+        # 在出错时返回一个安全的默认值
+        return False
+
 def execute_tool_call(tool_call, context=None):
     """
     执行工具调用
@@ -395,8 +467,26 @@ class HandlerLLM(HandlerBase, ABC):
         if len(chat_text) < 1:
             return
         logger.info(f'llm input {context.model_name} {chat_text} ')
-        current_content = context.history.generate_next_messages(chat_text, 
-                                                                 [context.current_image] if context.current_image is not None else [])
+        
+        # 使用大模型判断用户输入是否与视觉内容相关
+        is_visual_related = False
+        if context.current_image is not None:
+            logger.info("🖼️ 检测到图像，使用大模型判断用户输入是否与视觉相关...")
+            is_visual_related = is_visual_related_llm(
+                chat_text=chat_text,
+                api_key=context.api_key,
+                api_url=context.api_url,
+                model_name="qwen-flash"
+            )
+            logger.info(f"🎯 视觉相关性判断结果: {is_visual_related}")
+        else:
+            logger.info("ℹ️ 当前没有图像，跳过视觉相关性判断")
+        
+        # 根据判断结果决定是否包含图像
+        current_content = context.history.generate_next_messages(
+            chat_text, 
+            [context.current_image] if context.current_image is not None and is_visual_related else []
+        ) 
         logger.info(f"📚 对话历史长度: {len(current_content)} 条消息")
         logger.debug(f'llm input {context.model_name} {current_content} ')
         
