@@ -100,7 +100,47 @@ def execute_tool_call(tool_call, context=None):
     执行工具调用
     """
     function_name = tool_call.function.name
-    function_args = json.loads(tool_call.function.arguments)
+    
+    # 检查并修复参数格式
+    arguments_str = tool_call.function.arguments
+    logger.debug(f"🔍 原始参数字符串: {arguments_str}")
+    
+    try:
+        function_args = json.loads(arguments_str)
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️ JSON解析失败: {e}")
+        logger.warning(f"🔍 问题参数: {arguments_str}")
+        
+        # 尝试修复重复的JSON对象
+        if arguments_str.count('{') > 1:
+            logger.info("🔧 检测到重复的JSON对象，尝试修复...")
+            # 查找第一个完整的JSON对象
+            brace_count = 0
+            end_pos = 0
+            for i, char in enumerate(arguments_str):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_pos = i + 1
+                        break
+            
+            if end_pos > 0:
+                fixed_arguments = arguments_str[:end_pos]
+                logger.info(f"🔧 修复后的参数: {fixed_arguments}")
+                try:
+                    function_args = json.loads(fixed_arguments)
+                    logger.info("✅ 参数修复成功")
+                except json.JSONDecodeError as e2:
+                    logger.error(f"❌ 参数修复失败: {e2}")
+                    return f"工具调用参数解析失败: {e2}"
+            else:
+                logger.error("❌ 无法找到完整的JSON对象")
+                return f"工具调用参数格式错误: {e}"
+        else:
+            logger.error(f"❌ 无法修复参数格式: {e}")
+            return f"工具调用参数解析失败: {e}"
     
     logger.info(f"🔧 开始执行工具调用: {function_name}")
     logger.info(f"📝 工具调用参数: {function_args}")
@@ -531,25 +571,36 @@ class HandlerLLM(HandlerBase, ABC):
                     if choice.delta.tool_calls:
                         logger.info(f"🔧 检测到工具调用: {len(choice.delta.tool_calls)} 个")
                         for tool_call in choice.delta.tool_calls:
-                            if tool_call.id not in [tc.id for tc in tool_calls]:
+                            logger.debug(f"🔍 处理工具调用ID: {tool_call.id}, 参数: {tool_call.function.arguments if tool_call.function else 'None'}")
+                            
+                            # 查找现有工具调用
+                            existing_tc = None
+                            for tc in tool_calls:
+                                if tc.id == tool_call.id:
+                                    existing_tc = tc
+                                    break
+                            
+                            if existing_tc is None:
+                                # 添加新工具调用
+                                logger.debug(f"➕ 添加新工具调用: {tool_call.id}")
                                 tool_calls.append(tool_call)
                             else:
                                 # 更新现有工具调用
-                                for i, existing_tc in enumerate(tool_calls):
-                                    if existing_tc.id == tool_call.id:
-                                        if tool_call.function:
-                                            if not existing_tc.function:
-                                                existing_tc.function = tool_call.function
+                                logger.debug(f"🔄 更新现有工具调用: {tool_call.id}")
+                                if tool_call.function:
+                                    if not existing_tc.function:
+                                        existing_tc.function = tool_call.function
+                                    else:
+                                        if tool_call.function.name:
+                                            existing_tc.function.name = tool_call.function.name
+                                        if tool_call.function.arguments:
+                                            # 确保arguments不为None
+                                            if existing_tc.function.arguments is None:
+                                                existing_tc.function.arguments = tool_call.function.arguments
                                             else:
-                                                if tool_call.function.name:
-                                                    existing_tc.function.name = tool_call.function.name
-                                                if tool_call.function.arguments:
-                                                    # 确保arguments不为None
-                                                    if existing_tc.function.arguments is None:
-                                                        existing_tc.function.arguments = tool_call.function.arguments
-                                                    else:
-                                                        existing_tc.function.arguments += tool_call.function.arguments
-                                        break
+                                                # 对于流式响应，参数可能是分块传输的JSON，需要正确拼接
+                                                logger.debug(f"🔗 拼接参数: 原有='{existing_tc.function.arguments}', 新增='{tool_call.function.arguments}'")
+                                                existing_tc.function.arguments += tool_call.function.arguments
                     
                     # 处理普通文本输出
                     if choice.delta.content:

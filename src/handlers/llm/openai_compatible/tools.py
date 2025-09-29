@@ -736,6 +736,7 @@ def get_guidance_by_dimension(user_id: str, dimension_name: str) -> str:
 def extract_code_by_dimension(survey_detail: str, dimension_name: str) -> str:
     """
     从详细测评报告中提取指定维度对应的code值
+    格式：维度名称: code值\n详细测评信息
     """
     lines = survey_detail.split('\n')
     
@@ -746,7 +747,10 @@ def extract_code_by_dimension(survey_detail: str, dimension_name: str) -> str:
             parts = line.split(':')
             if len(parts) >= 2:
                 code = parts[1].strip()
-                # 验证code格式（如 1-5-C）
+                # 如果code值包含换行符，只取第一行（即code值本身）
+                if '\n' in code:
+                    code = code.split('\n')[0].strip()
+                # 验证code格式（如 1-1-A, 1-2-A, 1-5-C等）
                 if '-' in code and len(code) >= 5:
                     logger.info(f"从测评报告中提取到code值: {code}")
                     return code
@@ -774,6 +778,9 @@ def extract_code_by_dimension(survey_detail: str, dimension_name: str) -> str:
                     parts = line.split(':')
                     if len(parts) >= 2:
                         code = parts[1].strip()
+                        # 如果code值包含换行符，只取第一行（即code值本身）
+                        if '\n' in code:
+                            code = code.split('\n')[0].strip()
                         if '-' in code and len(code) >= 5:
                             logger.info(f"通过模糊匹配找到code值: {code}")
                             return code
