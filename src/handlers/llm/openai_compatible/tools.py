@@ -81,6 +81,23 @@ tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_guidance_plan",
+            "description": "根据测评结果的code值查询对应的指导方案。当用户需要获取具体的心理指导建议时使用此工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "测评结果的code值，如'1-5-C'，用于查询对应的指导方案。",
+                    }
+                },
+                "required": ["code"],
+            },
+        },
+    },
 ]
 
 def parse_survey_data(data_list: list) -> str:
@@ -239,66 +256,11 @@ def get_user_info(user_id: str) -> str:
 
 def get_user_survey_data(user_id: str) -> str:
     """
-    获取用户测评数据并返回简化的解析结果
-    使用 Redis 缓存避免重复请求
+    获取用户测评数据并返回详细解析结果
+    使用 get_survey_detail 函数获取详细测评报告
     """
-    # 默认API URL
-    api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do"
-    
-    # Redis 缓存 key 格式: userid:survey
-    redis_key = f"{user_id}:survey"
-    
-    # 尝试从 Redis 获取缓存
-    redis_conn = get_redis_connection()
-    if redis_conn:
-        try:
-            cached_data = redis_conn.get(redis_key)
-            if cached_data:
-                logger.debug(f"Using Redis cached survey data for user {user_id}")
-                return cached_data
-        except Exception as e:
-            logger.warning(f"Redis 读取失败，回退到内存缓存: {e}")
-    
-    # 如果 Redis 不可用，回退到内存缓存
-    cache_key = f"{user_id}_{api_url}"
-    if cache_key in _survey_data_cache:
-        logger.debug(f"Using memory cached survey data for user {user_id}")
-        return _survey_data_cache[cache_key]
-    
-    try:
-        headers = {'content-type': 'application/json'}
-        data = {"userId": user_id}
-        
-        response = requests.post(api_url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        
-        result = response.json()
-        if result.get("resultCode") == 200 and "data" in result:
-            data_list = result["data"]
-            parsed_data = parse_survey_data(data_list)
-            
-            # 优先存储到 Redis
-            if redis_conn:
-                try:
-                    redis_conn.set(redis_key, parsed_data, ex=604800)  # 设置1周过期时间 (7天)
-                    logger.info(f"Cached survey data to Redis for user {user_id} (expires in 1 week)")
-                except Exception as e:
-                    logger.warning(f"Redis 写入失败，回退到内存缓存: {e}")
-                    # 回退到内存缓存
-                    _survey_data_cache[cache_key] = parsed_data
-                    logger.info(f"Cached survey data to memory for user {user_id}")
-            else:
-                # Redis 不可用时使用内存缓存
-                _survey_data_cache[cache_key] = parsed_data
-                logger.info(f"Cached survey data to memory for user {user_id}")
-            
-            return parsed_data
-        else:
-            logger.warning(f"Failed to get survey data: {result.get('resultMsg', 'Unknown error')}")
-            return ""
-    except Exception as e:
-        logger.error(f"Error fetching user survey data: {e}")
-        return ""
+    # 直接调用 get_survey_detail 函数获取详细测评报告
+    return get_survey_detail(user_id)
 
 
 def query_knowledge_base(query: str, rag_api_url: str = None, rag_api_key: str = None, rag_model: str = None) -> str:
@@ -368,3 +330,164 @@ def query_knowledge_base(query: str, rag_api_url: str = None, rag_api_key: str =
     except Exception as e:
         logger.error(f"❌ 知识库查询失败: {e}")
         return ""
+
+
+def get_guidance_plan(code: str) -> str:
+    """
+    根据测评结果的code值查询对应的指导方案
+    使用 Redis 缓存避免重复请求
+    """
+    # 默认API URL
+    api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getBaseMindResult.do"
+    
+    # Redis 缓存 key 格式: code:guidance
+    redis_key = f"{code}:guidance"
+    
+    # 尝试从 Redis 获取缓存
+    redis_conn = get_redis_connection()
+    if redis_conn:
+        try:
+            cached_data = redis_conn.get(redis_key)
+            if cached_data:
+                logger.debug(f"Using Redis cached guidance plan for code {code}")
+                return cached_data
+        except Exception as e:
+            logger.warning(f"Redis 读取失败，回退到内存缓存: {e}")
+    
+    # 如果 Redis 不可用，回退到内存缓存
+    cache_key = f"{code}_guidance"
+    if cache_key in _user_info_cache:  # 复用现有的缓存字典
+        logger.debug(f"Using memory cached guidance plan for code {code}")
+        return _user_info_cache[cache_key]
+    
+    try:
+        headers = {'content-type': 'application/json'}
+        data = {"code": code}
+        
+        logger.info(f"查询指导方案，code: {code}")
+        response = requests.post(api_url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get("resultCode") == 200 and "data" in result and result["data"]:
+            guidance_data = result["data"][0]  # 取第一个结果
+            guidance_text = guidance_data.get("value", "")
+            
+            # 清理文本中的 \r\n 换行符，替换为 \n
+            guidance_text = guidance_text.replace('\r\n', '\n')
+            
+            # 优先存储到 Redis
+            if redis_conn:
+                try:
+                    redis_conn.set(redis_key, guidance_text, ex=604800)  # 设置1周过期时间
+                    logger.info(f"Cached guidance plan to Redis for code {code} (expires in 1 week)")
+                except Exception as e:
+                    logger.warning(f"Redis 写入失败，回退到内存缓存: {e}")
+                    # 回退到内存缓存
+                    _user_info_cache[cache_key] = guidance_text
+                    logger.info(f"Cached guidance plan to memory for code {code}")
+            else:
+                # Redis 不可用时使用内存缓存
+                _user_info_cache[cache_key] = guidance_text
+                logger.info(f"Cached guidance plan to memory for code {code}")
+            
+            logger.info(f"✅ 指导方案查询成功，code: {code}, 内容长度: {len(guidance_text)} 字符")
+            return guidance_text
+        else:
+            logger.warning(f"Failed to get guidance plan for code {code}: {result.get('resultMsg', 'Unknown error')}")
+            return ""
+    except Exception as e:
+        logger.error(f"Error fetching guidance plan for code {code}: {e}")
+        return ""
+
+
+def get_survey_detail(user_id: str) -> str:
+    """
+    获取用户详细测评报告
+    从响应列表中抽取各个测评维度中的 name（维度名称）、resulte（测评结果 code）与 value值（详细测评信息）
+    使用 Redis 缓存避免重复请求
+    """
+    # 默认API URL
+    api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do"
+    
+    # Redis 缓存 key 格式: userid:survey_detail
+    redis_key = f"{user_id}:survey_detail"
+    
+    # 尝试从 Redis 获取缓存
+    redis_conn = get_redis_connection()
+    if redis_conn:
+        try:
+            cached_data = redis_conn.get(redis_key)
+            if cached_data:
+                logger.debug(f"Using Redis cached survey detail for user {user_id}")
+                return cached_data
+        except Exception as e:
+            logger.warning(f"Redis 读取失败，回退到内存缓存: {e}")
+    
+    # 如果 Redis 不可用，回退到内存缓存
+    cache_key = f"{user_id}_survey_detail"
+    if cache_key in _user_info_cache:  # 复用现有的缓存字典
+        logger.debug(f"Using memory cached survey detail for user {user_id}")
+        return _user_info_cache[cache_key]
+    
+    try:
+        headers = {'content-type': 'application/json'}
+        data = {"userId": user_id}
+        
+        logger.info(f"查询详细测评报告，user_id: {user_id}")
+        response = requests.post(api_url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get("resultCode") == 200 and "data" in result:
+            data_list = result["data"]
+            parsed_detail = parse_survey_detail(data_list)
+            
+            # 优先存储到 Redis
+            if redis_conn:
+                try:
+                    redis_conn.set(redis_key, parsed_detail, ex=604800)  # 设置1周过期时间
+                    logger.info(f"Cached survey detail to Redis for user {user_id} (expires in 1 week)")
+                except Exception as e:
+                    logger.warning(f"Redis 写入失败，回退到内存缓存: {e}")
+                    # 回退到内存缓存
+                    _user_info_cache[cache_key] = parsed_detail
+                    logger.info(f"Cached survey detail to memory for user {user_id}")
+            else:
+                # Redis 不可用时使用内存缓存
+                _user_info_cache[cache_key] = parsed_detail
+                logger.info(f"Cached survey detail to memory for user {user_id}")
+            
+            logger.info(f"✅ 详细测评报告查询成功，user_id: {user_id}, 内容长度: {len(parsed_detail)} 字符")
+            return parsed_detail
+        else:
+            logger.warning(f"Failed to get survey detail for user {user_id}: {result.get('resultMsg', 'Unknown error')}")
+            return ""
+    except Exception as e:
+        logger.error(f"Error fetching survey detail for user {user_id}: {e}")
+        return ""
+
+
+def parse_survey_detail(data_list: list) -> str:
+    """
+    解析详细测评数据，提取各个维度的信息
+    输出格式：维度名称: 测评结果code - 详细测评信息
+    """
+    detail_lines = []
+    
+    for item in data_list:
+        if "name" not in item or "resulte" not in item or "value" not in item:
+            continue
+            
+        name = item["name"]
+        resulte = item["resulte"]
+        value = item["value"]
+        
+        # 清理文本中的 \r\n 换行符，替换为 \n
+        value = value.replace('\r\n', '\n')
+        
+        # 构建输出行
+        detail_line = f"{name}: {resulte}\n{value}"
+        detail_lines.append(detail_line)
+    
+    return "\n\n".join(detail_lines)

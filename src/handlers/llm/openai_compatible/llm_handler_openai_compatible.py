@@ -17,7 +17,7 @@ from chat_engine.data_models.chat_data_type import ChatDataType
 from chat_engine.contexts.session_context import SessionContext
 from chat_engine.data_models.runtime_data.data_bundle import DataBundle, DataBundleDefinition, DataBundleEntry
 from handlers.llm.openai_compatible.chat_history_manager import ChatHistory, HistoryMessage
-from handlers.llm.openai_compatible.tools import tools, get_user_info as tool_get_user_info, get_user_survey_data as tool_get_user_survey_data, query_knowledge_base as tool_query_knowledge_base
+from handlers.llm.openai_compatible.tools import tools, get_user_info as tool_get_user_info, get_user_survey_data as tool_get_user_survey_data, query_knowledge_base as tool_query_knowledge_base, get_guidance_plan as tool_get_guidance_plan
 
 # 全局缓存，避免重复请求
 _survey_data_cache = {}
@@ -132,6 +132,10 @@ def execute_tool_call(tool_call, context=None):
         else:
             logger.info("⚠️ 使用默认RAG配置")
             result = tool_query_knowledge_base(query)
+    elif function_name == "get_guidance_plan":
+        code = function_args.get("code", "")
+        logger.info(f"📋 获取指导方案，code: {code}")
+        result = tool_get_guidance_plan(code)
     else:
         logger.warning(f"❌ 未知的工具调用: {function_name}")
         result = f"未知的工具调用: {function_name}"
