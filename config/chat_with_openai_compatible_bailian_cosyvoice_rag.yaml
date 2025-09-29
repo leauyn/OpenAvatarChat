@@ -20,10 +20,10 @@ default:
       RtcClient:
         turn_config:
           turn_provider: "turn_server"
-          urls: ["turn:101.201.29.97:3478", "turns:101.201.29.97:5349"]
+          urls: ["turn:8.130.214.13:3478", "turns:8.130.214.13:5349"]
           username: "openavatar"
           credential: "asd123"
-          realm: "turn.101-201-29-97.turnserver"
+          realm: "turn.8-130-214-13.turnserver"
         module: client/rtc_client/client_handler_rtc
         # max time a session will last for
         connection_ttl: 1800
@@ -42,7 +42,7 @@ default:
         enabled: False
         module: asr/paraformer/asr_handler_paraformer
         model_name: "paraformer-realtime-v2"
-        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: os.getenv("DASHSCOPE_API_KEY")
         sample_rate: 16000
         format: "pcm"
         enable_intermediate_result: True
@@ -57,9 +57,7 @@ default:
         module: tts/bailian_tts/tts_handler_cosyvoice_bailian
         voice: "longxiaochun"
         model_name: "cosyvoice-v1"
-        # default=os.getenv("DASHSCOPE_API_KEY")
-        api_key: "sk-e63723d31555420d9b637f76a93a8e6a" # default=os.getenv("DASHSCOPE_API_KEY")
-        # api_key: "" # default=os.getenv("DASHSCOPE_API_KEY")
+        api_key: os.getenv("DASHSCOPE_API_KEY")
       LLMOpenAICompatible:
         enabled: True
         module: llm/openai_compatible/llm_handler_openai_compatible
@@ -68,8 +66,8 @@ default:
         history_length: 20
         # RAG配置
         enable_rag: True  # 启用RAG功能
-        rag_api_url: "https://ragflow.thinnovate.com/api/v1/chats_openai/9a15923a991b11f088f40242ac170006/chat/completions"
-        rag_api_key: "ragflow-I5ZWIyNDk0OTg3MDExZjBiZWNlMDI0Mm"
+        rag_api_url: "https://zhgk-ragflow.thinnovate.com/api/v1/chats_openai/5ffbc2c69cd711f0b1f912465a642f5f/chat/completions"
+        rag_api_key: os.getenv("RAGFLOW_API_KEY")
         rag_model: "model"
         # model_name: "gemini-2.0-flash"
         system_prompt_templates:
