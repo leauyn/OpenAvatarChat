@@ -1,6 +1,7 @@
 import requests
 import json
 import redis
+import re
 from loguru import logger
 
 # 全局缓存，避免重复请求
@@ -95,6 +96,27 @@ tools = [
                     }
                 },
                 "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_guidance_by_dimension",
+            "description": "根据测评维度名称获取对应的指导方案。当用户询问具体测评维度的解决方案或指导时使用此工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "user_id": {
+                        "type": "string",
+                        "description": "用户ID，用于获取该用户的测评结果。",
+                    },
+                    "dimension_name": {
+                        "type": "string",
+                        "description": "测评维度名称，如'师生关系'、'同伴关系'、'学习焦虑'、'抑郁'、'自我效能感'等。",
+                    }
+                },
+                "required": ["user_id", "dimension_name"],
             },
         },
     },
@@ -486,8 +508,275 @@ def parse_survey_detail(data_list: list) -> str:
         # 清理文本中的 \r\n 换行符，替换为 \n
         value = value.replace('\r\n', '\n')
         
+        # 精简内容：移除冗余信息
+        value = simplify_survey_value(value)
+        
         # 构建输出行
         detail_line = f"{name}: {resulte}\n{value}"
         detail_lines.append(detail_line)
     
     return "\n\n".join(detail_lines)
+
+
+def simplify_survey_value(value: str) -> str:
+    """
+    精简测评报告内容，移除冗余信息
+    """
+    # 1. 移除开头的分类说明
+    classification_pattern = r"根据学校量表测评结果，将学生划分为健康（深蓝）、一般关注（浅蓝）、重点关注（黄色）三类，.*?。\r?\n"
+    value = re.sub(classification_pattern, "", value)
+    
+    # 2. 移除注解部分（注：...）
+    note_pattern = r"（注：.*?）"
+    value = re.sub(note_pattern, "", value)
+    
+    # 3. 移除"将学生划分为*三类，"内容（使用通配符匹配）
+    classification_short_pattern = r"将学生划分为.*?三类，"
+    value = re.sub(classification_short_pattern, "", value)
+    
+    # 3.1 移除单独的"将学生划分为*三类"内容（不在句子开头的情况）
+    classification_standalone_pattern = r"将学生划分为.*?三类"
+    value = re.sub(classification_standalone_pattern, "", value)
+    
+    # 4. 移除"根据学校量表测*相比较"内部内容（使用通配符匹配）
+    school_test_pattern = r"根据学校量表测.*?相比较,"
+    value = re.sub(school_test_pattern, "", value)
+    
+    # 5. 移除"在测评结果的对比上"等D条前缀
+    d_prefix_patterns = [
+        r"在测评结果的对比上,由于[^,]*?,因此显示为该学生的分数,",
+        r"全国其他地区常模相比较,",
+    ]
+    for pattern in d_prefix_patterns:
+        value = re.sub(pattern, "", value)
+    
+    # 6. 移除所有"根据学校量表测评结果"内容
+    school_result_pattern = r"根据学校量表测评结果"
+    value = re.sub(school_result_pattern, "", value)
+    
+    # 7. 处理B、C、D条：按标点符号分割，保留数字所在的完整项目
+    value = simplify_bcd_items(value)
+    
+    # 8. 清理多余的空行和换行符
+    value = re.sub(r'\n\s*\n', '\n', value)  # 移除多余空行
+    value = value.strip()  # 移除首尾空白
+    
+    return value
+
+
+def simplify_bcd_items(value: str) -> str:
+    """
+    简化B、C、D条内容，按标点符号分割，保留数字所在的完整项目
+    无数字的B、C、D条直接跳过
+    """
+    # 先处理行内的B、C、D项
+    # 移除B条无数字内容（如"B.社会用户暂无学校对比。"）
+    b_no_number_pattern = r'B\.社会用户暂无学校对比。'
+    value = re.sub(b_no_number_pattern, '', value)
+    
+    lines = value.split('\n')
+    result_lines = []
+    
+    for line in lines:
+        # 检查是否是B、C或D项
+        if re.match(r'^[BCD]\.', line.strip()):
+            # 检查是否包含数字
+            if has_number(line):
+                # 按标点符号分割，保留数字所在的完整项目
+                number_content = extract_number_item(line)
+                if number_content:
+                    # 保持原有的B.、C.或D.前缀
+                    prefix = re.match(r'^[BCD]\.', line.strip()).group()
+                    result_lines.append(f"{prefix} {number_content}")
+                else:
+                    # 如果提取失败，保留原行
+                    result_lines.append(line)
+            else:
+                # 无数字的B、C、D条直接跳过
+                continue
+        else:
+            result_lines.append(line)
+    
+    return '\n'.join(result_lines)
+
+
+def has_number(text: str) -> bool:
+    """
+    检查文本是否包含数字（包括百分比、分数等）
+    """
+    # 检查是否包含数字（包括百分比、分数等）
+    return bool(re.search(r'\d+\.?\d*[%分]?', text))
+
+
+def extract_number_item(text: str) -> str:
+    """
+    按标点符号分割B、C、D条内容，保留数字所在的完整项目
+    支持全角和半角逗号作为分割符
+    """
+    # 移除B.、C.或D.前缀
+    text = re.sub(r'^[BCD]\.\s*', '', text.strip())
+    
+    # 按标点符号分割成项目列表，保留分割符
+    # 使用多种标点符号作为分割符：。！？；，,（全角和半角逗号）
+    items = re.split(r'([。！？；，,])', text)
+    
+    # 重新组合项目，每个项目包含其标点符号
+    combined_items = []
+    for i in range(0, len(items), 2):
+        if i + 1 < len(items):
+            item = items[i].strip() + items[i + 1]
+            if item.strip():
+                combined_items.append(item.strip())
+        elif items[i].strip():
+            combined_items.append(items[i].strip())
+    
+    # 查找包含数字的项目
+    for item in combined_items:
+        # 检查项目是否包含数字（包括百分比、分数等）
+        if re.search(r'\d+\.?\d*[%分]?', item):
+            return item
+    
+    # 如果没有找到包含数字的项目，返回原文本
+    return text
+
+
+def extract_number_content(text: str) -> str:
+    """
+    提取含有数字的部分内容
+    根据图片示例，提取类似"30.7%的人群"、"27.6%的人群"、"12.2%"这样的内容
+    """
+    # 移除B.、C.或D.前缀
+    text = re.sub(r'^[BCD]\.\s*', '', text.strip())
+    
+    # 查找含有数字和百分比的模式
+    # 匹配模式：数字% + 可选的人群/常模等词汇
+    number_patterns = [
+        r'(\d+\.?\d*%[^。！？；，]*?[人群常模样本空间])',  # 数字% + 人群/常模等
+        r'(\d+\.?\d*%[^。！？；，]*)',  # 数字% + 其他内容
+        r'(\d+\.?\d*[^。！？；，]*?%)',  # 数字 + 其他内容 + %
+    ]
+    
+    for pattern in number_patterns:
+        matches = re.findall(pattern, text)
+        if matches:
+            # 返回第一个匹配的内容
+            result = matches[0].strip()
+            # 确保"人群"等词汇完整
+            if result.endswith('人') and '人群' in text:
+                result = result + '群'
+            return result
+    
+    # 如果没有找到百分比，查找其他数字模式
+    simple_number_pattern = r'(\d+\.?\d*[^。！？；，]*)'
+    matches = re.findall(simple_number_pattern, text)
+    if matches:
+        return matches[0].strip()
+    
+    return text
+
+
+def extract_last_sentence(text: str) -> str:
+    """
+    提取文本中的最后一句话（以标点符号为分割）
+    """
+    # 移除C.或D.前缀
+    text = re.sub(r'^[CD]\.\s*', '', text.strip())
+    
+    # 按标点符号分割句子，保留分隔符
+    sentences = re.split(r'([。！？；，])', text)
+    
+    # 重新组合句子，每个句子包含其标点符号
+    combined_sentences = []
+    for i in range(0, len(sentences), 2):
+        if i + 1 < len(sentences):
+            sentence = sentences[i].strip() + sentences[i + 1]
+            if sentence.strip():
+                combined_sentences.append(sentence.strip())
+        elif sentences[i].strip():
+            combined_sentences.append(sentences[i].strip())
+    
+    # 返回最后一句话
+    if combined_sentences:
+        return combined_sentences[-1]
+    else:
+        return text
+
+
+def get_guidance_by_dimension(user_id: str, dimension_name: str) -> str:
+    """
+    根据测评维度名称获取对应的指导方案
+    先获取用户的详细测评报告，找到对应维度的code值，然后获取指导方案
+    """
+    logger.info(f"🔍 根据维度获取指导方案，用户ID: {user_id}, 维度: {dimension_name}")
+    
+    # 先获取用户的详细测评报告
+    survey_detail = get_survey_detail(user_id)
+    if not survey_detail:
+        logger.warning(f"无法获取用户 {user_id} 的测评报告")
+        return ""
+    
+    # 从测评报告中提取对应维度的code值
+    code = extract_code_by_dimension(survey_detail, dimension_name)
+    if not code:
+        logger.warning(f"未找到维度 '{dimension_name}' 对应的code值")
+        return f"抱歉，未找到您关于'{dimension_name}'的测评结果，无法提供针对性指导。"
+    
+    logger.info(f"找到维度 '{dimension_name}' 对应的code值: {code}")
+    
+    # 使用code值获取指导方案
+    guidance_plan = get_guidance_plan(code)
+    if not guidance_plan:
+        logger.warning(f"无法获取code '{code}' 对应的指导方案")
+        return f"抱歉，无法获取关于'{dimension_name}'的指导方案。"
+    
+    logger.info(f"✅ 成功获取维度 '{dimension_name}' 的指导方案，内容长度: {len(guidance_plan)} 字符")
+    return guidance_plan
+
+
+def extract_code_by_dimension(survey_detail: str, dimension_name: str) -> str:
+    """
+    从详细测评报告中提取指定维度对应的code值
+    """
+    lines = survey_detail.split('\n')
+    
+    for i, line in enumerate(lines):
+        # 查找包含维度名称的行
+        if dimension_name in line and ':' in line:
+            # 提取code值（格式：维度名称: code值）
+            parts = line.split(':')
+            if len(parts) >= 2:
+                code = parts[1].strip()
+                # 验证code格式（如 1-5-C）
+                if '-' in code and len(code) >= 5:
+                    logger.info(f"从测评报告中提取到code值: {code}")
+                    return code
+    
+    # 如果直接匹配失败，尝试模糊匹配
+    dimension_mapping = {
+        '学习焦虑': '学习焦虑',
+        '状态焦虑': '状态焦虑', 
+        '抑郁': '抑郁',
+        '同伴关系': '同伴关系',
+        '师生关系': '师生关系',
+        '亲子关系': '亲子关系',
+        '自我效能感': '自我效能感',
+        '计算能力': '计算能力',
+        '注意能力': '注意能力',
+        '识字能力': '识字能力',
+        '流畅能力': '流畅能力'
+    }
+    
+    # 尝试模糊匹配
+    for key, value in dimension_mapping.items():
+        if key in dimension_name or dimension_name in key:
+            for line in lines:
+                if value in line and ':' in line:
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        code = parts[1].strip()
+                        if '-' in code and len(code) >= 5:
+                            logger.info(f"通过模糊匹配找到code值: {code}")
+                            return code
+    
+    logger.warning(f"未找到维度 '{dimension_name}' 对应的code值")
+    return ""
