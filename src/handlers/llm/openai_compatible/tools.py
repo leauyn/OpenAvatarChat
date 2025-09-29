@@ -2,16 +2,75 @@ import requests
 import json
 import redis
 import re
+import yaml
+import os
 from loguru import logger
+from openai import OpenAI
 
 # 全局缓存，避免重复请求
 _survey_data_cache = {}
 _user_info_cache = {}
+_simplify_cache = {}  # LLM精简结果缓存
 
 # Redis 连接配置
 REDIS_HOST = 'localhost'
 REDIS_PORT = 6779
 REDIS_DB = 0
+
+# LLM精简功能独立配置
+SIMPLIFY_LLM_CONFIG = {
+    "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "api_key": os.getenv("DASHSCOPE_API_KEY"),
+    "model": "qwen-plus",
+    "temperature": 0.1,
+    "max_tokens": 2000
+}
+
+# 全局LLM客户端实例
+_simplify_llm_client = None
+
+def get_default_llm_config():
+    """获取LLM精简功能的默认配置"""
+    return {
+        "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_key": os.getenv("DASHSCOPE_API_KEY"),
+        "model": "qwen-flash",
+        "temperature": 0.1,
+        "max_tokens": 2000,
+        "enable_llm_simplify": True,
+        "fallback_to_regex": True,
+        "system_prompt": "你是一个专业的心理测评报告处理助手，擅长精简和提取核心信息。",
+        "user_prompt_template": ""
+    }
+
+def load_simplify_llm_config():
+    """从配置文件加载LLM精简功能配置"""
+    global SIMPLIFY_LLM_CONFIG
+    
+    config_path = os.path.join(os.path.dirname(__file__), '../../config/simplify_llm_config.yaml')
+    
+    # 获取默认配置
+    default_config = get_default_llm_config()
+    
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                file_config = yaml.safe_load(f)
+            
+            # 使用默认配置作为基础，文件配置覆盖默认值
+            SIMPLIFY_LLM_CONFIG = {**default_config, **file_config}
+            
+            logger.info(f"✅ LLM精简配置已从文件加载: {config_path}")
+            return True
+        else:
+            # 使用默认配置
+            SIMPLIFY_LLM_CONFIG = default_config
+            logger.warning(f"⚠️ LLM精简配置文件不存在: {config_path}，使用默认配置")
+            return False
+    except Exception as e:
+        logger.error(f"❌ 加载LLM精简配置失败: {e}，使用默认配置")
+        SIMPLIFY_LLM_CONFIG = default_config
+        return False
 
 def get_redis_connection():
     """获取 Redis 连接，确保以文本格式存储"""
@@ -29,6 +88,48 @@ def get_redis_connection():
     except Exception as e:
         logger.error(f"Redis 连接失败: {e}")
         return None
+
+
+def get_simplify_llm_client():
+    """获取LLM精简功能的客户端，避免多次初始化"""
+    global _simplify_llm_client
+    
+    if _simplify_llm_client is None:
+        try:
+            # 检查API Key是否有效
+            api_key = SIMPLIFY_LLM_CONFIG.get("api_key")
+            if not api_key or api_key == "sk-your-simplify-api-key":
+                logger.warning("⚠️ LLM精简API Key未配置或使用默认值，跳过初始化")
+                return None
+            
+            _simplify_llm_client = OpenAI(
+                api_key=api_key,
+                base_url=SIMPLIFY_LLM_CONFIG["api_url"]
+            )
+            logger.info(f"✅ LLM精简客户端初始化成功，模型: {SIMPLIFY_LLM_CONFIG['model']}")
+        except Exception as e:
+            logger.error(f"❌ LLM精简客户端初始化失败: {e}")
+            return None
+    else:
+        logger.debug("🔄 使用已初始化的LLM精简客户端")
+    
+    return _simplify_llm_client
+
+
+def update_simplify_llm_config(**kwargs):
+    """更新LLM精简功能配置"""
+    global _simplify_llm_client
+    
+    # 更新配置
+    for key, value in kwargs.items():
+        if key in SIMPLIFY_LLM_CONFIG:
+            SIMPLIFY_LLM_CONFIG[key] = value
+    
+    # 重置客户端实例，强制重新初始化
+    _simplify_llm_client = None
+    
+    logger.info(f"✅ LLM精简配置已更新: {SIMPLIFY_LLM_CONFIG}")
+    return SIMPLIFY_LLM_CONFIG
 
 tools = [
     {
@@ -280,6 +381,7 @@ def get_user_survey_data(user_id: str) -> str:
     """
     获取用户测评数据并返回详细解析结果
     使用 get_survey_detail 函数获取详细测评报告
+    支持LLM精简内容
     """
     # 直接调用 get_survey_detail 函数获取详细测评报告
     return get_survey_detail(user_id)
@@ -428,6 +530,7 @@ def get_survey_detail(user_id: str) -> str:
     获取用户详细测评报告
     从响应列表中抽取各个测评维度中的 name（维度名称）、resulte（测评结果 code）与 value值（详细测评信息）
     使用 Redis 缓存避免重复请求
+    支持LLM精简内容
     """
     # 默认API URL
     api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do"
@@ -497,10 +600,25 @@ def parse_survey_detail(data_list: list) -> str:
     """
     detail_lines = []
     
+    # 收集所有需要精简的内容
+    items_to_process = []
     for item in data_list:
         if "name" not in item or "resulte" not in item or "value" not in item:
             continue
-            
+        items_to_process.append(item)
+    
+    # 如果只有一个项目，直接处理
+    if len(items_to_process) == 1:
+        item = items_to_process[0]
+        name = item["name"]
+        resulte = item["resulte"]
+        value = item["value"].replace('\r\n', '\n')
+        value = simplify_survey_value(value)
+        detail_line = f"{name}: {resulte}\n{value}"
+        return detail_line
+    
+    # 多个项目时，批量处理以提高效率
+    for item in items_to_process:
         name = item["name"]
         resulte = item["resulte"]
         value = item["value"]
@@ -508,7 +626,7 @@ def parse_survey_detail(data_list: list) -> str:
         # 清理文本中的 \r\n 换行符，替换为 \n
         value = value.replace('\r\n', '\n')
         
-        # 精简内容：移除冗余信息
+        # 精简内容：直接使用LLM精简功能
         value = simplify_survey_value(value)
         
         # 构建输出行
@@ -518,12 +636,102 @@ def parse_survey_detail(data_list: list) -> str:
     return "\n\n".join(detail_lines)
 
 
-def simplify_survey_value(value: str) -> str:
+def simplify_survey_value_with_llm(value: str) -> str:
     """
-    精简测评报告内容，移除冗余信息
+    使用LLM精简测评报告内容，提取核心信息
+    直接使用硬编码的LLM客户端，支持缓存
     """
-    # 1. 移除开头的分类说明
-    classification_pattern = r"根据学校量表测评结果，将学生划分为健康（深蓝）、一般关注（浅蓝）、重点关注（黄色）三类，.*?。\r?\n"
+    # 检查缓存
+    import hashlib
+    value_hash = hashlib.md5(value.encode('utf-8')).hexdigest()
+    if value_hash in _simplify_cache:
+        logger.debug("🔄 使用缓存的LLM精简结果")
+        return _simplify_cache[value_hash]
+    
+    # 检查是否启用LLM精简功能
+    if not SIMPLIFY_LLM_CONFIG.get("enable_llm_simplify", True):
+        logger.info("ℹ️ LLM精简功能已禁用，使用正则表达式方法")
+        result = simplify_survey_value_regex(value)
+        _simplify_cache[value_hash] = result
+        return result
+    
+    # 直接使用独立的LLM客户端
+    simplify_client = get_simplify_llm_client()
+    if not simplify_client:
+        # 如果没有可用的LLM客户端，回退到正则表达式方法
+        if SIMPLIFY_LLM_CONFIG.get("fallback_to_regex", True):
+            logger.warning("⚠️ 没有可用的LLM客户端，回退到正则表达式方法")
+            result = simplify_survey_value_regex(value)
+            _simplify_cache[value_hash] = result
+            return result
+        else:
+            logger.error("❌ 没有可用的LLM客户端且未启用正则表达式回退")
+            _simplify_cache[value_hash] = value
+            return value
+    
+    try:
+        # 构建LLM提示词
+        user_prompt_template = SIMPLIFY_LLM_CONFIG.get("user_prompt_template", "")
+        if user_prompt_template:
+            prompt = user_prompt_template.format(value=value)
+        else:
+            # 使用默认提示词
+            prompt = f"""请精简以下测评报告内容，只保留核心信息：
+
+要求：
+1. 移除开头的冗余描述"根据学校量表测评结果，将学生划分为健康（深蓝）、一般关注（浅蓝）、重点关注（黄色）三类，"
+2. 保留标准描述（健康为...，一般关注为...，重点关注为...）
+3. 保留A条（学生状态描述）
+4. 对于B、C、D条，仅保留包含数字及前后内容的核心部分，如：
+   - "优于学校统一样本集39.9的人群"
+   - "优于中海高科数据提供单位统一样本空间27.6的人群" 
+   - "劣于全国其他地区常模7.1"
+   - "该学生同伴关系得分为85分"
+   - "该学生抑郁情况等于全国其他地区常模"
+5. 移除所有冗余的描述性文字
+6. 保持原有的A.、B.、C.、D.前缀格式
+7. 无数字的B、C、D条直接跳过
+
+原始内容：
+{value}
+
+精简后的内容："""
+
+        # 调用LLM进行精简
+        response = simplify_client.chat.completions.create(
+            model=SIMPLIFY_LLM_CONFIG["model"],
+            messages=[
+                {"role": "system", "content": SIMPLIFY_LLM_CONFIG.get("system_prompt", "你是一个专业的心理测评报告处理助手，擅长精简和提取核心信息。")},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=SIMPLIFY_LLM_CONFIG["temperature"],
+            max_tokens=SIMPLIFY_LLM_CONFIG["max_tokens"]
+        )
+        
+        # 提取精简后的内容
+        simplified_content = response.choices[0].message.content.strip()
+        logger.info(f"✅ LLM精简完成，原长度: {len(value)}, 精简后长度: {len(simplified_content)}")
+        # 缓存结果
+        _simplify_cache[value_hash] = simplified_content
+        return simplified_content
+        
+    except Exception as e:
+        logger.warning(f"⚠️ LLM精简失败，回退到正则表达式方法: {e}")
+        if SIMPLIFY_LLM_CONFIG.get("fallback_to_regex", True):
+            result = simplify_survey_value_regex(value)
+            _simplify_cache[value_hash] = result
+            return result
+        else:
+            _simplify_cache[value_hash] = value
+            return value
+
+
+def simplify_survey_value_regex(value: str) -> str:
+    """
+    使用正则表达式精简测评报告内容（备用方法）
+    """
+    # 1. 保留开头的分类说明，只移除"根据学校量表测评结果，将学生划分为"部分
+    classification_pattern = r"根据学校量表测评结果，将学生划分为"
     value = re.sub(classification_pattern, "", value)
     
     # 2. 移除注解部分（注：...）
@@ -564,9 +772,17 @@ def simplify_survey_value(value: str) -> str:
     return value
 
 
+def simplify_survey_value(value: str) -> str:
+    """
+    精简测评报告内容，优先使用LLM，回退到正则表达式
+    """
+    # 直接使用LLM精简功能
+    return simplify_survey_value_with_llm(value)
+
+
 def simplify_bcd_items(value: str) -> str:
     """
-    简化B、C、D条内容，按标点符号分割，保留数字所在的完整项目
+    简化B、C、D条内容，仅保留包含数字的核心部分
     无数字的B、C、D条直接跳过
     """
     # 先处理行内的B、C、D项
@@ -580,132 +796,74 @@ def simplify_bcd_items(value: str) -> str:
     for line in lines:
         # 检查是否是B、C或D项
         if re.match(r'^[BCD]\.', line.strip()):
-            # 检查是否包含数字
-            if has_number(line):
-                # 按标点符号分割，保留数字所在的完整项目
-                number_content = extract_number_item(line)
-                if number_content:
-                    # 保持原有的B.、C.或D.前缀
-                    prefix = re.match(r'^[BCD]\.', line.strip()).group()
-                    result_lines.append(f"{prefix} {number_content}")
-                else:
-                    # 如果提取失败，保留原行
-                    result_lines.append(line)
-            else:
-                # 无数字的B、C、D条直接跳过
-                continue
+            # 提取包含数字的核心内容
+            number_content = extract_number_item(line)
+            if number_content:
+                # 保持原有的B.、C.或D.前缀
+                prefix = re.match(r'^[BCD]\.', line.strip()).group()
+                result_lines.append(f"{prefix} {number_content}")
+            # 无数字的B、C、D条直接跳过
         else:
             result_lines.append(line)
     
     return '\n'.join(result_lines)
 
 
-def has_number(text: str) -> bool:
-    """
-    检查文本是否包含数字（包括百分比、分数等）
-    """
-    # 检查是否包含数字（包括百分比、分数等）
-    return bool(re.search(r'\d+\.?\d*[%分]?', text))
-
-
 def extract_number_item(text: str) -> str:
     """
-    按标点符号分割B、C、D条内容，保留数字所在的完整项目
-    支持全角和半角逗号作为分割符
+    提取BCD项目中包含数字的核心部分
+    仅保留如"优于学校统一样本集39.9的人群"、"该学生同伴关系得分为85分"等核心内容
     """
     # 移除B.、C.或D.前缀
     text = re.sub(r'^[BCD]\.\s*', '', text.strip())
     
-    # 按标点符号分割成项目列表，保留分割符
-    # 使用多种标点符号作为分割符：。！？；，,（全角和半角逗号）
-    items = re.split(r'([。！？；，,])', text)
-    
-    # 重新组合项目，每个项目包含其标点符号
-    combined_items = []
-    for i in range(0, len(items), 2):
-        if i + 1 < len(items):
-            item = items[i].strip() + items[i + 1]
-            if item.strip():
-                combined_items.append(item.strip())
-        elif items[i].strip():
-            combined_items.append(items[i].strip())
-    
-    # 查找包含数字的项目
-    for item in combined_items:
-        # 检查项目是否包含数字（包括百分比、分数等）
-        if re.search(r'\d+\.?\d*[%分]?', item):
-            return item
-    
-    # 如果没有找到包含数字的项目，返回原文本
-    return text
-
-
-def extract_number_content(text: str) -> str:
-    """
-    提取含有数字的部分内容
-    根据图片示例，提取类似"30.7%的人群"、"27.6%的人群"、"12.2%"这样的内容
-    """
-    # 移除B.、C.或D.前缀
-    text = re.sub(r'^[BCD]\.\s*', '', text.strip())
-    
-    # 查找含有数字和百分比的模式
-    # 匹配模式：数字% + 可选的人群/常模等词汇
+    # 定义数字模式，匹配数字及其直接上下文，按优先级排序
     number_patterns = [
-        r'(\d+\.?\d*%[^。！？；，]*?[人群常模样本空间])',  # 数字% + 人群/常模等
-        r'(\d+\.?\d*%[^。！？；，]*)',  # 数字% + 其他内容
-        r'(\d+\.?\d*[^。！？；，]*?%)',  # 数字 + 其他内容 + %
+        # 得分为模式：如"该学生同伴关系得分为85分"、"该生数字划销的得分为16分"
+        r'([^，,。！？；]*?得分为\d+\.?\d*分[^，,。！？；]*)',
+        # 优于+数字模式：如"优于学校统一样本集39.9的人群"、"优于中海高科数据提供单位统一样本空间27.6的人群"
+        r'(优于[^，,。！？；]*?\d+\.?\d*[%分]?[^，,。！？；]*)',
+        # 劣于+数字模式：如"劣于全国其他地区常模7.1"
+        r'(劣于[^，,。！？；]*?\d+\.?\d*[%分]?[^，,。！？；]*)',
+        # 百分比+人群模式：如"39.9%的人群"、"27.6%的人群"
+        r'(\d+\.?\d*%的人群)',
+        # 百分比+常模模式：如"48.6%的常模"
+        r'(\d+\.?\d*%的常模)',
+        # 百分比+样本空间模式：如"87.8%的样本空间"
+        r'(\d+\.?\d*%的样本空间)',
     ]
     
+    # 按优先级匹配，找到第一个匹配的模式就返回
     for pattern in number_patterns:
         matches = re.findall(pattern, text)
         if matches:
-            # 返回第一个匹配的内容
-            result = matches[0].strip()
-            # 确保"人群"等词汇完整
-            if result.endswith('人') and '人群' in text:
-                result = result + '群'
-            return result
+            # 去重并保持顺序
+            unique_matches = []
+            seen = set()
+            for match in matches:
+                match = match.strip()
+                if match and match not in seen:
+                    unique_matches.append(match)
+                    seen.add(match)
+            
+            if unique_matches:
+                # 用逗号连接多条得分
+                result = '，'.join(unique_matches)
+                # 清理多余的空格
+                result = re.sub(r'\s+', ' ', result)
+                return result
     
-    # 如果没有找到百分比，查找其他数字模式
-    simple_number_pattern = r'(\d+\.?\d*[^。！？；，]*)'
-    matches = re.findall(simple_number_pattern, text)
-    if matches:
-        return matches[0].strip()
-    
-    return text
+    # 如果没有找到匹配模式，返回空字符串（跳过该项）
+    return ""
 
 
-def extract_last_sentence(text: str) -> str:
-    """
-    提取文本中的最后一句话（以标点符号为分割）
-    """
-    # 移除C.或D.前缀
-    text = re.sub(r'^[CD]\.\s*', '', text.strip())
-    
-    # 按标点符号分割句子，保留分隔符
-    sentences = re.split(r'([。！？；，])', text)
-    
-    # 重新组合句子，每个句子包含其标点符号
-    combined_sentences = []
-    for i in range(0, len(sentences), 2):
-        if i + 1 < len(sentences):
-            sentence = sentences[i].strip() + sentences[i + 1]
-            if sentence.strip():
-                combined_sentences.append(sentence.strip())
-        elif sentences[i].strip():
-            combined_sentences.append(sentences[i].strip())
-    
-    # 返回最后一句话
-    if combined_sentences:
-        return combined_sentences[-1]
-    else:
-        return text
 
 
 def get_guidance_by_dimension(user_id: str, dimension_name: str) -> str:
     """
     根据测评维度名称获取对应的指导方案
     先获取用户的详细测评报告，找到对应维度的code值，然后获取指导方案
+    支持LLM精简内容
     """
     logger.info(f"🔍 根据维度获取指导方案，用户ID: {user_id}, 维度: {dimension_name}")
     
@@ -787,3 +945,7 @@ def extract_code_by_dimension(survey_detail: str, dimension_name: str) -> str:
     
     logger.warning(f"未找到维度 '{dimension_name}' 对应的code值")
     return ""
+
+
+# 模块加载时自动加载配置文件
+load_simplify_llm_config()

@@ -600,7 +600,9 @@ class HandlerLLM(HandlerBase, ABC):
                                             else:
                                                 # 对于流式响应，参数可能是分块传输的JSON，需要正确拼接
                                                 logger.debug(f"🔗 拼接参数: 原有='{existing_tc.function.arguments}', 新增='{tool_call.function.arguments}'")
-                                                existing_tc.function.arguments += tool_call.function.arguments
+                                                # 检查是否已经包含相同的参数，避免重复拼接
+                                                if tool_call.function.arguments not in existing_tc.function.arguments:
+                                                    existing_tc.function.arguments += tool_call.function.arguments
                     
                     # 处理普通文本输出
                     if choice.delta.content:
