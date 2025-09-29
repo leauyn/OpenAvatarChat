@@ -1,10 +1,33 @@
 import requests
 import json
+import redis
 from loguru import logger
 
 # 全局缓存，避免重复请求
 _survey_data_cache = {}
 _user_info_cache = {}
+
+# Redis 连接配置
+REDIS_HOST = 'localhost'
+REDIS_PORT = 6779
+REDIS_DB = 0
+
+def get_redis_connection():
+    """获取 Redis 连接，确保以文本格式存储"""
+    try:
+        r = redis.Redis(
+            host=REDIS_HOST, 
+            port=REDIS_PORT, 
+            db=REDIS_DB, 
+            decode_responses=True,  # 确保返回字符串而不是字节
+            encoding='utf-8'        # 明确指定编码
+        )
+        # 测试连接
+        r.ping()
+        return r
+    except Exception as e:
+        logger.error(f"Redis 连接失败: {e}")
+        return None
 
 tools = [
     {
@@ -151,15 +174,29 @@ def parse_user_info(user_data: dict) -> str:
 def get_user_info(user_id: str) -> str:
     """
     获取用户信息并返回解析结果
-    使用缓存避免重复请求
+    使用 Redis 缓存避免重复请求
     """
     # 默认API URL
     api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/userInfo.do"
     
-    # 检查缓存
+    # Redis 缓存 key 格式: userid:user_info
+    redis_key = f"{user_id}:user_info"
+    
+    # 尝试从 Redis 获取缓存
+    redis_conn = get_redis_connection()
+    if redis_conn:
+        try:
+            cached_data = redis_conn.get(redis_key)
+            if cached_data:
+                logger.debug(f"Using Redis cached user info for user {user_id}")
+                return cached_data
+        except Exception as e:
+            logger.warning(f"Redis 读取失败，回退到内存缓存: {e}")
+    
+    # 如果 Redis 不可用，回退到内存缓存
     cache_key = f"{user_id}_{api_url}"
     if cache_key in _user_info_cache:
-        logger.debug(f"Using cached user info for user {user_id}")
+        logger.debug(f"Using memory cached user info for user {user_id}")
         return _user_info_cache[cache_key]
     
     try:
@@ -175,9 +212,22 @@ def get_user_info(user_id: str) -> str:
         if result.get("resultCode") == 200 and "data" in result:
             user_data = result["data"]
             parsed_info = parse_user_info(user_data)
-            # 缓存结果
-            _user_info_cache[cache_key] = parsed_info
-            logger.info(f"Cached user info for user {user_id}")
+            
+            # 优先存储到 Redis
+            if redis_conn:
+                try:
+                    redis_conn.set(redis_key, parsed_info, ex=604800)  # 设置1周过期时间
+                    logger.info(f"Cached user info to Redis for user {user_id} (expires in 1 week)")
+                except Exception as e:
+                    logger.warning(f"Redis 写入失败，回退到内存缓存: {e}")
+                    # 回退到内存缓存
+                    _user_info_cache[cache_key] = parsed_info
+                    logger.info(f"Cached user info to memory for user {user_id}")
+            else:
+                # Redis 不可用时使用内存缓存
+                _user_info_cache[cache_key] = parsed_info
+                logger.info(f"Cached user info to memory for user {user_id}")
+            
             return parsed_info
         else:
             logger.warning(f"Failed to get user info: {result.get('resultMsg', 'Unknown error')}")
@@ -190,15 +240,29 @@ def get_user_info(user_id: str) -> str:
 def get_user_survey_data(user_id: str) -> str:
     """
     获取用户测评数据并返回简化的解析结果
-    使用缓存避免重复请求
+    使用 Redis 缓存避免重复请求
     """
     # 默认API URL
     api_url = "https://www.zhgk-mind.com/api/dwsurvey/anon/response/getUserResultInfo.do"
     
-    # 检查缓存
+    # Redis 缓存 key 格式: userid:survey
+    redis_key = f"{user_id}:survey"
+    
+    # 尝试从 Redis 获取缓存
+    redis_conn = get_redis_connection()
+    if redis_conn:
+        try:
+            cached_data = redis_conn.get(redis_key)
+            if cached_data:
+                logger.debug(f"Using Redis cached survey data for user {user_id}")
+                return cached_data
+        except Exception as e:
+            logger.warning(f"Redis 读取失败，回退到内存缓存: {e}")
+    
+    # 如果 Redis 不可用，回退到内存缓存
     cache_key = f"{user_id}_{api_url}"
     if cache_key in _survey_data_cache:
-        logger.debug(f"Using cached survey data for user {user_id}")
+        logger.debug(f"Using memory cached survey data for user {user_id}")
         return _survey_data_cache[cache_key]
     
     try:
@@ -212,9 +276,22 @@ def get_user_survey_data(user_id: str) -> str:
         if result.get("resultCode") == 200 and "data" in result:
             data_list = result["data"]
             parsed_data = parse_survey_data(data_list)
-            # 缓存结果
-            _survey_data_cache[cache_key] = parsed_data
-            logger.info(f"Cached survey data for user {user_id}")
+            
+            # 优先存储到 Redis
+            if redis_conn:
+                try:
+                    redis_conn.set(redis_key, parsed_data, ex=604800)  # 设置1周过期时间 (7天)
+                    logger.info(f"Cached survey data to Redis for user {user_id} (expires in 1 week)")
+                except Exception as e:
+                    logger.warning(f"Redis 写入失败，回退到内存缓存: {e}")
+                    # 回退到内存缓存
+                    _survey_data_cache[cache_key] = parsed_data
+                    logger.info(f"Cached survey data to memory for user {user_id}")
+            else:
+                # Redis 不可用时使用内存缓存
+                _survey_data_cache[cache_key] = parsed_data
+                logger.info(f"Cached survey data to memory for user {user_id}")
+            
             return parsed_data
         else:
             logger.warning(f"Failed to get survey data: {result.get('resultMsg', 'Unknown error')}")
