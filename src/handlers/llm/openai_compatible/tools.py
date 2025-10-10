@@ -47,7 +47,7 @@ def load_simplify_llm_config():
     """从配置文件加载LLM精简功能配置"""
     global SIMPLIFY_LLM_CONFIG
     
-    config_path = os.path.join(os.path.dirname(__file__), '../../config/simplify_llm_config.yaml')
+    config_path = os.path.join(os.path.dirname(__file__), '../../../config/simplify_llm_config.yaml')
     
     # 获取默认配置
     default_config = get_default_llm_config()
@@ -597,9 +597,8 @@ def parse_survey_detail(data_list: list) -> str:
     """
     解析详细测评数据，提取各个维度的信息
     输出格式：维度名称: 测评结果code - 详细测评信息
+    使用批量处理减少LLM调用次数
     """
-    detail_lines = []
-    
     # 收集所有需要精简的内容
     items_to_process = []
     for item in data_list:
@@ -607,32 +606,36 @@ def parse_survey_detail(data_list: list) -> str:
             continue
         items_to_process.append(item)
     
-    # 如果只有一个项目，直接处理
-    if len(items_to_process) == 1:
-        item = items_to_process[0]
-        name = item["name"]
-        resulte = item["resulte"]
-        value = item["value"].replace('\r\n', '\n')
-        value = simplify_survey_value(value)
-        detail_line = f"{name}: {resulte}\n{value}"
-        return detail_line
+    if not items_to_process:
+        return ""
     
-    # 多个项目时，批量处理以提高效率
-    for item in items_to_process:
+    # 使用批量精简功能，一次性处理所有项目
+    import time
+    start_time = time.time()
+    logger.info(f"🔄 开始批量精简 {len(items_to_process)} 个测评项目")
+    simplified_values = simplify_survey_values_batch(items_to_process)
+    end_time = time.time()
+    logger.info(f"⏱️ 批量精简耗时: {end_time - start_time:.2f}秒")
+    
+    # 构建输出结果
+    detail_lines = []
+    for i, item in enumerate(items_to_process):
         name = item["name"]
         resulte = item["resulte"]
-        value = item["value"]
         
-        # 清理文本中的 \r\n 换行符，替换为 \n
-        value = value.replace('\r\n', '\n')
-        
-        # 精简内容：直接使用LLM精简功能
-        value = simplify_survey_value(value)
+        # 获取对应的精简后内容
+        if i < len(simplified_values):
+            value = simplified_values[i]
+        else:
+            # 如果批量处理失败，回退到单个处理
+            logger.warning(f"⚠️ 批量处理结果不足，回退到单个处理项目 {i+1}")
+            value = simplify_survey_value(item["value"].replace('\r\n', '\n'))
         
         # 构建输出行
         detail_line = f"{name}: {resulte}\n{value}"
         detail_lines.append(detail_line)
     
+    logger.info(f"✅ 批量精简完成，处理了 {len(detail_lines)} 个测评项目")
     return "\n\n".join(detail_lines)
 
 
@@ -778,6 +781,127 @@ def simplify_survey_value(value: str) -> str:
     """
     # 直接使用LLM精简功能
     return simplify_survey_value_with_llm(value)
+
+
+def simplify_survey_values_batch(items_to_process: list) -> list:
+    """
+    批量精简多个测评报告内容，减少LLM调用次数
+    返回精简后的内容列表，顺序与输入一致
+    """
+    if not items_to_process:
+        return []
+    
+    # 如果只有一个项目，直接处理
+    if len(items_to_process) == 1:
+        item = items_to_process[0]
+        value = item["value"].replace('\r\n', '\n')
+        simplified_value = simplify_survey_value_with_llm(value)
+        return [simplified_value]
+    
+    # 检查是否启用LLM精简功能
+    if not SIMPLIFY_LLM_CONFIG.get("enable_llm_simplify", True):
+        logger.info("ℹ️ LLM精简功能已禁用，使用正则表达式方法")
+        return [simplify_survey_value_regex(item["value"].replace('\r\n', '\n')) for item in items_to_process]
+    
+    # 获取LLM客户端
+    simplify_client = get_simplify_llm_client()
+    if not simplify_client:
+        # 如果没有可用的LLM客户端，回退到正则表达式方法
+        if SIMPLIFY_LLM_CONFIG.get("fallback_to_regex", True):
+            logger.warning("⚠️ 没有可用的LLM客户端，回退到正则表达式方法")
+            return [simplify_survey_value_regex(item["value"].replace('\r\n', '\n')) for item in items_to_process]
+        else:
+            logger.error("❌ 没有可用的LLM客户端且未启用正则表达式回退")
+            return [item["value"].replace('\r\n', '\n') for item in items_to_process]
+    
+    # 构建批量处理的提示词
+    batch_content = []
+    for i, item in enumerate(items_to_process):
+        name = item["name"]
+        value = item["value"].replace('\r\n', '\n')
+        batch_content.append(f"【项目{i+1}】{name}:\n{value}")
+    
+    combined_content = "\n\n".join(batch_content)
+    
+    # 检查缓存
+    import hashlib
+    content_hash = hashlib.md5(combined_content.encode('utf-8')).hexdigest()
+    cache_key = f"batch_{content_hash}"
+    if cache_key in _simplify_cache:
+        logger.debug("🔄 使用缓存的批量LLM精简结果")
+        return _simplify_cache[cache_key]
+    
+    try:
+        # 构建LLM提示词
+        user_prompt_template = SIMPLIFY_LLM_CONFIG.get("user_prompt_template", "")
+        if user_prompt_template:
+            prompt = user_prompt_template.format(value=combined_content)
+        else:
+            # 使用默认提示词
+            prompt = f"""请精简以下多个测评报告内容，只保留核心信息：
+
+要求：
+1. 移除开头的冗余描述"根据学校量表测评结果，将学生划分为健康（深蓝）、一般关注（浅蓝）、重点关注（黄色）三类，"
+2. 保留标准描述（健康为...，一般关注为...，重点关注为...）
+3. 保留A条（学生状态描述）
+4. 对于B、C、D条，仅保留包含数字及前后内容的核心部分，如：
+   - "优于学校统一样本集39.9的人群"
+   - "优于中海高科数据提供单位统一样本空间27.6的人群" 
+   - "劣于全国其他地区常模7.1"
+   - "该学生同伴关系得分为85分"
+   - "该学生抑郁情况等于全国其他地区常模"
+5. 移除所有冗余的描述性文字
+6. 保持原有的A.、B.、C.、D.前缀格式
+7. 无数字的B、C、D条直接跳过
+
+**重要：请按照【项目1】、【项目2】等格式分别处理每个项目，并在每个项目之间用【项目分隔符】分隔。**
+
+原始内容：
+{combined_content}
+
+精简后的内容："""
+
+        # 调用LLM进行批量精简
+        response = simplify_client.chat.completions.create(
+            model=SIMPLIFY_LLM_CONFIG["model"],
+            messages=[
+                {"role": "system", "content": SIMPLIFY_LLM_CONFIG.get("system_prompt", "你是一个专业的心理测评报告处理助手，擅长精简和提取核心信息。")},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=SIMPLIFY_LLM_CONFIG["temperature"],
+            max_tokens=SIMPLIFY_LLM_CONFIG["max_tokens"]
+        )
+        
+        # 提取精简后的内容
+        simplified_content = response.choices[0].message.content.strip()
+        logger.info(f"✅ 批量LLM精简完成，原长度: {len(combined_content)}, 精简后长度: {len(simplified_content)}")
+        
+        # 按项目分隔符分割结果
+        if "【项目分隔符】" in simplified_content:
+            results = simplified_content.split("【项目分隔符】")
+        else:
+            # 如果没有分隔符，尝试按项目编号分割
+            import re
+            project_pattern = r'【项目\d+】'
+            results = re.split(project_pattern, simplified_content)
+            results = [r.strip() for r in results if r.strip()]
+        
+        # 确保结果数量与输入一致
+        if len(results) != len(items_to_process):
+            logger.warning(f"⚠️ 批量精简结果数量不匹配，期望{len(items_to_process)}个，实际{len(results)}个")
+            # 如果数量不匹配，回退到逐个处理
+            return [simplify_survey_value_with_llm(item["value"].replace('\r\n', '\n')) for item in items_to_process]
+        
+        # 缓存结果
+        _simplify_cache[cache_key] = results
+        return results
+        
+    except Exception as e:
+        logger.warning(f"⚠️ 批量LLM精简失败，回退到逐个处理: {e}")
+        if SIMPLIFY_LLM_CONFIG.get("fallback_to_regex", True):
+            return [simplify_survey_value_regex(item["value"].replace('\r\n', '\n')) for item in items_to_process]
+        else:
+            return [item["value"].replace('\r\n', '\n') for item in items_to_process]
 
 
 def simplify_bcd_items(value: str) -> str:
