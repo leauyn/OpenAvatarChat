@@ -38,3 +38,5 @@ exp/
 uv.lock
 logs/
 .lock
+tests/custom/*
+docs/*
